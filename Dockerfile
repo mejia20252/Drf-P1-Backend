@@ -11,7 +11,7 @@ WORKDIR /app
 # Dependencias de compilación (solo en build stage)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-  && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
 # Virtualenv aislado para copiar a la imagen final
 RUN python -m venv /venv
@@ -43,12 +43,11 @@ USER appuser
 # Copia el código de la app
 COPY --chown=appuser:appuser . .
 
-# (Opcional) Si usas archivos estáticos:
-# Establece tu módulo de settings antes de descomentar la siguiente línea
-# ENV DJANGO_SETTINGS_MODULE=tu_proyecto.settings
-# RUN python manage.py collectstatic --noinput
+# Copy and set up the entrypoint script
+COPY --chown=appuser:appuser ./entrypoint.sh /usr/src/app/
+RUN chmod +x /usr/src/app/entrypoint.sh
 
 EXPOSE 8000
 
-# Reemplaza "tu_proyecto.wsgi:application" por tu módulo WSGI real
-CMD ["gunicorn", "drf_p1_backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+# Use the entrypoint script instead of the direct CMD
+ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
