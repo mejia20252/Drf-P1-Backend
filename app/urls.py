@@ -4,7 +4,10 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from django.conf.urls import handler404
 from .views import  (RolViewSet, UsuarioViewSet, TelefonoViewSet, AdministradorViewSet,
-        PersonalViewSet, ClienteViewSet,MyTokenObtainPairView,LogoutView
+        PersonalViewSet,MyTokenObtainPairView,LogoutView,GroupViewSet,AuthPermissionViewSet,
+        PropietarioViewSet, InquilinoViewSet, CasaViewSet, ResidenteViewSet,
+    AreaComunViewSet, ReservaViewSet, PagoReservaViewSet, TareaMantenimientoViewSet,
+    BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet
         )
 
 router = DefaultRouter()
@@ -12,8 +15,22 @@ router.register(r"roles", RolViewSet)
 router.register(r"usuarios", UsuarioViewSet)
 router.register(r"administradores", AdministradorViewSet)
 router.register(r"personal", PersonalViewSet)
-router.register(r"clientes", ClienteViewSet)
 router.register(r"telefonos", TelefonoViewSet)
+router.register(r'grupos',        GroupViewSet,        basename='grupos')
+router.register(r'auth-permisos', AuthPermissionViewSet, basename='auth-permisos')
+router.register(r'propietarios', PropietarioViewSet)
+router.register(r'inquilinos', InquilinoViewSet)
+router.register(r'casas', CasaViewSet)
+router.register(r'residentes', ResidenteViewSet)
+router.register(r'areas-comunes', AreaComunViewSet)
+router.register(r'reservas', ReservaViewSet)
+router.register(r'pagos-reservas', PagoReservaViewSet)
+router.register(r'tareas-mantenimiento', TareaMantenimientoViewSet)
+router.register(r'bitacoras', BitacoraViewSet)
+router.register(r'detalle-bitacoras', DetalleBitacoraViewSet)
+router.register(r'mascotas', MascotaViewSet)
+router.register(r'vehiculos', VehiculoViewSet)
+
 urlpatterns = [
     path("", include(router.urls)),
     path('login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),

@@ -25,3 +25,14 @@ def custom_exception_handler(exc, context):
     resp.data = payload
     return resp
 
+"""
+{
+  "usuario": {
+    "username": [
+      "A user with that username already exists."
+    ],
+    "email": [
+      "user with this email already exists."
+    ]
+  }
+}"""

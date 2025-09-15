@@ -24,7 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-atx29evqx8tn7s(cvaa#=%kv2o8m#0v7g3@)@s4yf4&&xp+$6m'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ["*"]  # pro listar los dominios específicos por seguridad. 
 auth_user_model = 'app.Usuario'  #nameapp.User

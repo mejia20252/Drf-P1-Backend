@@ -1,23 +1,37 @@
+# app/admin.py
 from django.contrib import admin
-
-# Register your models here.
-from django.contrib import admin
+from django.contrib.auth.models import Group
 from .models import (
     Rol,
     Usuario,
     Telefono,
     Administrador,
     Personal,
-    Cliente,
+   
     Bitacora,
     DetalleBitacora,
 )
 
-# You can register models without a custom class if you don't need special configurations.
-# This is a simple, straightforward way to get them into the admin panel.
-admin.site.register(Rol)
+# Ya no es necesario registrar Group, Django lo hace por defecto.
 
-# For Usuario, we create a custom Admin class to improve its display.
+@admin.register(Rol)
+class RolAdmin(admin.ModelAdmin):
+    list_display = ['nombre', 'grupo']
+    search_fields = ['nombre']
+
+    def save_model(self, request, obj, form, change):
+        # Aseguramos que el objeto Rol es nuevo
+        if not change:
+            # Creamos o obtenemos un Group con el mismo nombre
+            grupo, created = Group.objects.get_or_create(name=obj.nombre)
+            # Asignamos el Group al Rol antes de guardar
+            obj.grupo = grupo
+            
+        # Guardamos el objeto Rol
+        super().save_model(request, obj, form, change)
+
+# Para Usuario, creamos una clase Admin personalizada para mejorar su visualización.
+@admin.register(Usuario)
 class UsuarioAdmin(admin.ModelAdmin):
     list_display = (
         'username',
@@ -35,43 +49,37 @@ class UsuarioAdmin(admin.ModelAdmin):
         'email',
     )
     list_filter = ('rol', 'sexo')
-admin.site.register(Usuario, UsuarioAdmin)
 
-# For Telefono, we can also customize the display for better readability.
+# Para Telefono, también personalizamos la visualización para una mejor legibilidad.
+@admin.register(Telefono)
 class TelefonoAdmin(admin.ModelAdmin):
     list_display = ('numero', 'tipo', 'usuario')
     list_filter = ('tipo',)
     search_fields = ('numero',)
-admin.site.register(Telefono, TelefonoAdmin)
 
-# Register other models with custom Admin classes for a better user experience.
+# Registramos otros modelos con clases Admin personalizadas para una mejor experiencia de usuario.
+@admin.register(Administrador)
 class AdministradorAdmin(admin.ModelAdmin):
     list_display = ('usuario', 'numero_licencia', 'empresa', 'activo')
     list_filter = ('activo', 'fecha_certificacion')
     search_fields = ('usuario__email', 'numero_licencia')
-admin.site.register(Administrador, AdministradorAdmin)
 
+@admin.register(Personal)
 class PersonalAdmin(admin.ModelAdmin):
     list_display = ('usuario', 'tipo', 'salario', 'fecha_ingreso', 'activo')
     list_filter = ('tipo', 'activo')
     search_fields = ('usuario__email',)
-admin.site.register(Personal, PersonalAdmin)
 
-class ClienteAdmin(admin.ModelAdmin):
-    list_display = ('usuario', 'tipo_cliente', 'fecha_registro', 'activo')
-    list_filter = ('activo', 'tipo_cliente')
-    search_fields = ('usuario__email',)
-admin.site.register(Cliente, ClienteAdmin)
 
+@admin.register(Bitacora)
 class BitacoraAdmin(admin.ModelAdmin):
     list_display = ('login', 'logout', 'usuario', 'ip', 'device')
     list_filter = ('usuario', 'login')
     search_fields = ('usuario__email', 'ip')
     date_hierarchy = 'login'
-admin.site.register(Bitacora, BitacoraAdmin)
 
+@admin.register(DetalleBitacora)
 class DetalleBitacoraAdmin(admin.ModelAdmin):
     list_display = ('bitacora', 'accion', 'fecha', 'tabla')
     list_filter = ('tabla', 'accion')
     search_fields = ('tabla', 'accion')
-admin.site.register(DetalleBitacora, DetalleBitacoraAdmin)
