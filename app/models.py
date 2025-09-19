@@ -1,3 +1,4 @@
+from rest_framework import generics
 from django.db import models
 from django.contrib.auth.models import AbstractUser,Group
 # En tu archivo models.py
@@ -197,34 +198,46 @@ class AreaComun(models.Model):
         return self.nombre
 # En tu archivo models.py
 
+# models.py
+
 class Reserva(models.Model):
     area_comun = models.ForeignKey(
         'AreaComun',
         on_delete=models.CASCADE,
-        related_name='reservas'
+        related_name='reservas',
+        help_text="Área común que se está reservando."
     )
-    # Relaciona la reserva con el usuario que la realiza.
-    # Usar el modelo 'Usuario' es más flexible, ya que un inquilino,
-    # propietario, o incluso un administrador podría hacer una reserva.
-    usuario = models.ForeignKey(
-        Usuario,
+    # 📝 CAMBIO CLAVE: Relacionar con Residente, no con Usuario
+    residente = models.ForeignKey(
+        'Residente',
         on_delete=models.CASCADE,
-        related_name='reservas'
+        related_name='reservas',
+        null=True,  # 👈 Added null=True
+        blank=True, # 👈 Added blank=True
+        help_text="Residente que realiza la reserva."
     )
     fecha = models.DateField()
     hora_inicio = models.TimeField()
     hora_fin = models.TimeField()
-    # Por ejemplo, 'pendiente', 'confirmada', 'cancelada'
     estado = models.CharField(
         max_length=50,
-        default='pendiente'
+        default='pendiente',
+        help_text="Ejemplo: 'pendiente', 'confirmada', 'cancelada'."
     )
-    # Un campo para indicar si la reserva ha sido pagada.
-    pagada = models.BooleanField(default=False)
+    pagada = models.BooleanField(
+        default=False,
+        help_text="Indica si el costo de la reserva ha sido pagado."
+    )
+
+    class Meta:
+        # Esto evita reservas duplicadas para el mismo residente en la misma hora
+        unique_together = ('residente', 'area_comun', 'fecha', 'hora_inicio')
 
     def __str__(self):
-        return f"Reserva de {self.area_comun.nombre} el {self.fecha} por {self.usuario.nombre}"
-# En tu archivo models.py
+        return (
+            f"Reserva de {self.area_comun.nombre} el {self.fecha} "
+            f"por {self.residente.usuario.nombre} {self.residente.usuario.apellido_paterno}"
+        )
 
 class PagoReserva(models.Model):
     reserva = models.OneToOneField(
@@ -246,6 +259,9 @@ class PagoReserva(models.Model):
 # En tu archivo models.py
 
 class TareaMantenimiento(models.Model):
+    """
+    Modelo principal para las tareas de mantenimiento
+    """
     PRIORIDAD_CHOICES = [
         ('baja', 'Baja'),
         ('media', 'Media'),
@@ -254,42 +270,40 @@ class TareaMantenimiento(models.Model):
     ]
 
     ESTADO_CHOICES = [
-        ('pendiente', 'Pendiente'),
-        ('en_progreso', 'En progreso'),
-        ('completada', 'Completada'),
-        ('cancelada', 'Cancelada'),
+        ('creada', 'Creada'),           # Tarea creada pero no asignada
+        ('asignada', 'Asignada'),       # Tarea asignada a trabajador(es)
+        ('en_progreso', 'En progreso'), # Al menos un trabajador empezó
+        ('completada', 'Completada'),   # Tarea totalmente completada
+        ('cancelada', 'Cancelada'),     # Tarea cancelada
     ]
 
-    # El administrador que crea la tarea
-    administrador_asigna = models.ForeignKey(
-        'Administrador',
-        on_delete=models.SET_NULL,
-        related_name='tareas_asignadas',
-        null=True, blank=True
-    )
-    # El personal asignado a la tarea
-    personal_asignado = models.ForeignKey(
-        'Personal',
-        on_delete=models.SET_NULL,
-        related_name='tareas_recibidas',
-        null=True, blank=True
-    )
-    # Descripción de la tarea
-    descripcion = models.TextField()
-    # Relaciona la tarea con una casa, si aplica
+    # Información básica de la tarea
+    titulo = models.CharField(max_length=200, help_text="Título breve de la tarea",null=True, blank=True,)
+    descripcion = models.TextField(help_text="Descripción detallada del trabajo a realizar",null=True, blank=True,)
+    
+
+    # Ubicación de la tarea (solo UNA de estas opciones)
     casa = models.ForeignKey(
         'Casa',
         on_delete=models.SET_NULL,
         related_name='tareas_mantenimiento',
-        null=True, blank=True
+        null=True, blank=True,
+        help_text="Casa específica donde se realizará el trabajo (opcional)"
     )
-    # Opcionalmente, relaciona la tarea con un área común
     area_comun = models.ForeignKey(
         'AreaComun',
         on_delete=models.SET_NULL,
         related_name='tareas_mantenimiento',
-        null=True, blank=True
+        null=True, blank=True,
+        help_text="Área común donde se realizará el trabajo (opcional)"
     )
+    ubicacion_personalizada = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Descripción de ubicación si no es casa ni área común específica"
+    )
+    
+    # Propiedades de la tarea
     prioridad = models.CharField(
         max_length=20,
         choices=PRIORIDAD_CHOICES,
@@ -298,13 +312,26 @@ class TareaMantenimiento(models.Model):
     estado = models.CharField(
         max_length=20,
         choices=ESTADO_CHOICES,
-        default='pendiente'
+        default='creada'
     )
+    
+    # Fechas importantes
     fecha_creacion = models.DateTimeField(auto_now_add=True)
-    fecha_limite = models.DateField(blank=True, null=True)
+    
+    
+    
+    # Costos estimados/reales
+    costo_estimado = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        null=True, blank=True,
+        help_text="Costo estimado de la tarea"
+    )
+    
 
-    def __str__(self):
-        return f"Tarea #{self.id}: {self.descripcion[:30]}..."
+    class Meta:
+        ordering = ['-fecha_creacion']
+        verbose_name = "Tarea de Mantenimiento"
+        verbose_name_plural = "Tareas de Mantenimiento"
 class Vehiculo(models.Model):
     placa = models.CharField(max_length=20, unique=True)
     # Por ejemplo, 'automóvil', 'motocicleta'
@@ -363,12 +390,7 @@ class Residente(models.Model):
 
     class Meta:
         # Evita que un mismo usuario esté registrado dos veces en la misma casa
-        constraints = [
-            models.UniqueConstraint(
-                fields=['usuario', 'casa'],
-                name='unique_usuario_casa'
-            )
-        ]
+        unique_together = ('usuario', 'casa')
 
     def __str__(self):
         return f"{self.usuario.nombre} {self.usuario.apellido_paterno} - {self.get_rol_residencia_display()} en {self.casa.numero_casa}"
@@ -379,3 +401,113 @@ def delete_related_user(sender, instance, **kwargs):
     if not hasattr(user, 'administrador') and not hasattr(user, 'personal'):
         user.delete()  # ← ¡SE EJECUTA!
  '''
+
+# models.py
+
+class Comunicado(models.Model):
+    TITULO_MAX_LENGTH = 200
+    ESTADO_CHOICES = [
+        ('borrador', 'Borrador'),
+        ('publicado', 'Publicado'),
+        ('archivado', 'Archivado'),
+    ]
+
+    titulo = models.CharField(max_length=TITULO_MAX_LENGTH)
+    contenido = models.TextField(help_text="Contenido del comunicado en formato texto plano o HTML")
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_publicacion = models.DateTimeField(
+        null=True, 
+        blank=True, 
+        help_text="Cuando se hizo visible a los residentes"
+    )
+    estado = models.CharField(
+        max_length=20,
+        choices=ESTADO_CHOICES,
+        default='borrador'
+    )
+    # Opcional: ¿Dirigido a una casa específica? ¿O a todo el condominio?
+    casa_destino = models.ForeignKey(
+        Casa,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='comunicados',
+        help_text="Si es nulo, va dirigido a todo el condominio"
+    )
+    # Opcional: Adjuntar archivo (PDF, imagen, etc.)
+    archivo_adjunto = models.FileField(
+        upload_to='comunicados_adjuntos/',
+        null=True,
+        blank=True
+    )
+    # Opcional: Fecha de expiración del comunicado
+    fecha_expiracion = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Después de esta fecha, el comunicado ya no se muestra"
+    )
+
+    class Meta:
+        ordering = ['-fecha_publicacion', '-fecha_creacion']
+        verbose_name = "Comunicado"
+        verbose_name_plural = "Comunicados"
+
+    def __str__(self):
+        return f"{self.titulo} ({self.get_estado_display()}) - {self.fecha_publicacion or 'No publicado'}"
+class ConceptoPago(models.Model):
+    nombre = models.CharField(max_length=100)  # Ej: "Expensa Mensual", "Multa por ruido", "Alquiler Salón"
+    descripcion = models.TextField(blank=True, null=True)
+    es_fijo = models.BooleanField(default=False)  # Si el monto es fijo o variable
+    monto_fijo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.nombre
+    
+class Cuota(models.Model):
+    concepto = models.ForeignKey(ConceptoPago, on_delete=models.PROTECT)
+    casa = models.ForeignKey(Casa, on_delete=models.CASCADE, related_name='cuotas')
+    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    periodo = models.DateField()  
+    fecha_vencimiento = models.DateField()
+    estado = models.CharField(
+        max_length=20,
+        choices=[
+            ('pendiente', 'Pendiente'),
+            ('pagada', 'Pagada'),
+            ('vencida', 'Vencida'),
+            ('cancelada', 'Cancelada'),
+        ],
+        default='pendiente'
+    )
+    fecha_pago = models.DateTimeField(null=True, blank=True)
+    generada_automaticamente = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ('casa', 'periodo', 'concepto')
+
+    def __str__(self):
+        return f"{self.concepto.nombre} - Casa {self.casa.numero_casa} - {self.periodo.strftime('%Y-%m')}"    
+
+    
+class Pago(models.Model):
+    METODO_PAGO_CHOICES = [
+        ('tarjeta', 'Tarjeta de crédito/débito'),
+        ('transferencia', 'Transferencia bancaria'),
+        ('efectivo', 'Efectivo'),
+        ('qr', 'Pago QR'),
+    ]
+
+    cuota = models.ForeignKey(Cuota, on_delete=models.SET_NULL, null=True, blank=True, related_name='pagos')
+    reserva = models.ForeignKey(Reserva, on_delete=models.SET_NULL, null=True, blank=True, related_name='pagos')
+    concepto = models.ForeignKey(ConceptoPago, on_delete=models.PROTECT)  # Para saber qué se está pagando
+    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    fecha_pago = models.DateTimeField(auto_now_add=True)
+    metodo_pago = models.CharField(max_length=50, choices=METODO_PAGO_CHOICES)
+    referencia = models.CharField(max_length=100, blank=True, null=True)  # N° de transacción, comprobante, etc.
+    pagado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, blank=True)  # ¿Quién pagó?
+    comprobante = models.FileField(upload_to='comprobantes/', null=True, blank=True)
+
+    def __str__(self):
+        return f"Pago de {self.monto} - {self.fecha_pago.strftime('%Y-%m-%d')}"

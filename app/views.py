@@ -1,3 +1,4 @@
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import api_view
 from django.shortcuts import get_object_or_404
 from django.db import models 
@@ -18,13 +19,13 @@ logger = logging.getLogger(__name__)
 from rest_framework import viewsets
 from .models import (
     Rol, Usuario, Telefono, Administrador, Personal,
-    Bitacora,
+    Bitacora,Comunicado
 )
 from  .mixin import BitacoraLoggerMixin
 from .serializers import (ChangePasswordSerializer,
-    RolSerializer, UsuarioSerializer, TelefonoSerializer, 
+    RolSerializer,PropietarioUsuarioSerializer, CasaConPropietarioDetalleSerializer,UsuarioSerializer, TelefonoSerializer, AsignarCasaAVehiculoSerializer,
     AdministradorSerializer, PersonalSerializer,LogoutSerializer,MyTokenPairSerializer,
-    GroupSerializer,AuthPermissionSerializer,UsuarioMeSerializer ,AsignarResidenteACasaSerializer
+    GroupSerializer,AuthPermissionSerializer,UsuarioMeSerializer ,AsignarResidenteACasaSerializer,ComunicadoSerializer
 )
 
 from rest_framework.permissions import IsAuthenticated
@@ -54,6 +55,8 @@ class RolViewSet(viewsets.ModelViewSet):
 class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all()
     serializer_class = UsuarioSerializer
+    filter_backends = [DjangoFilterBackend]  # 👈 AÑADE ESTO
+    filterset_fields = ['rol__nombre']  # 👈
     # Usar el permiso IsAuthenticated para requerir que el usuario esté autenticado
     # permission_classes = [IsAuthenticated]
     #permission_classes = [IsAdministrador,IsAuthenticated]
@@ -113,7 +116,12 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
         # 204 sin contenido (front solo necesita saber que fue OK)
         return Response(status=status.HTTP_204_NO_CONTENT)
-    
+    @action(detail=False, methods=['get'], url_path='propietarios', url_name='propietarios')
+    def propietarios(self, request):
+        propietarios = Usuario.objects.filter(propietario__isnull=False).select_related('rol', 'propietario')
+
+        serializer = PropietarioUsuarioSerializer(propietarios, many=True)
+        return Response(serializer.data)
 
 class TelefonoViewSet(viewsets.ModelViewSet):
     queryset = Telefono.objects.all()
@@ -152,6 +160,7 @@ class MyTokenObtainPairView(TokenObtainPairView):
             ip=ip,
             device=device
         )
+        logger.info('el usuario ingreso al perfil',)
 
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 #vistas
@@ -180,9 +189,9 @@ class LogoutView(APIView):
             if k.startswith("HTTP_") or k in ("CONTENT_TYPE", "CONTENT_LENGTH")
         }
 
-        logger.info("=== RAW BODY === %s", raw)
-        logger.info("=== PARSED DATA === %s", request.data)
-        logger.info("=== HEADERS === %s", headers)
+        #logger.info("=== RAW BODY === %s", raw)
+        #logger.info("=== PARSED DATA === %s", request.data)
+        #logger.info("=== HEADERS === %s", headers)
     
         # invalidamos el refresh token
         serializer = LogoutSerializer(data=request.data)
@@ -240,18 +249,58 @@ class CasaViewSet(viewsets.ModelViewSet):
     serializer_class = CasaSerializer
     permission_classes = [IsAuthenticated]
 
+# ======== NUEVO: Asignar propietario a una casa ========
     @action(detail=True, methods=['post'], url_path='asignar-propietario', url_name='asignar_propietario')
     def asignar_propietario(self, request, pk=None):
         casa = self.get_object()
-        serializer = AsignarPropietarioACasaSerializer(data=request.data, context={'casa': casa})
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
 
-        # Devuelve la casa actualizada
-        return Response(CasaSerializer(casa).data, status=status.HTTP_200_OK)
+        serializer = AsignarPropietarioACasaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        updated_casa = serializer.save(casa=casa)
+
+        # Devolvemos la casa actualizada con todos sus datos
+        response_serializer = CasaSerializer(updated_casa)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+        # ======== NUEVO: Desasignar propietario de una casa ========
+    @action(detail=True, methods=['post'], url_path='desasignar-propietario')
+    def desasignar_propietario(self, request, pk=None):
+    # 1. Obtener la instancia de la casa
+        casa = self.get_object()
+
+    # 2. Verificar si la casa ya tiene un propietario asignado
+        if not casa.propietario:
+            return Response({'detail': 'Esta casa ya no tiene un propietario asignado.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # 3. Desasignar el propietario estableciendo el campo a None
+        casa.propietario = None
+        casa.save()
+
+    # 4. Devolver la casa actualizada (ahora sin propietario)
+        response_serializer = CasaSerializer(casa)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+    @action(detail=False, methods=['get'], url_path='detalles', url_name='casas_detalles')
+    def detalles(self, request):
+        """
+        Endpoint para listar todas las casas con detalles completos del propietario.
+        """
+        casas = self.get_queryset()
+        serializer = CasaConPropietarioDetalleSerializer(casas, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='detalle-completo', url_name='casa_detalle_completo')
+    def detalle_completo(self, request, pk=None):
+        casa = self.get_object()
+        serializer = CasaConPropietarioDetalleSerializer(casa)
+        return Response(serializer.data)
 class ResidenteViewSet(viewsets.ModelViewSet):
     queryset = Residente.objects.all()
+    filter_backends = [DjangoFilterBackend]  # 👈 AÑADE ESTO
+    filterset_fields = ['rol_residencia'] 
     serializer_class = ResidenteSerializer
+
     # permission_classes = [IsAuthenticated]
 class AreaComunViewSet(viewsets.ModelViewSet):
     queryset = AreaComun.objects.all()
@@ -289,25 +338,24 @@ class MascotaViewSet(viewsets.ModelViewSet):
     # permission_classes = [IsAuthenticated]
 
 class VehiculoViewSet(viewsets.ModelViewSet):
-    queryset = Vehiculo.objects.select_related('dueno', 'casa').all()
-    serializer_class = VehiculoSerializer
-    permission_classes = [IsAuthenticated]
+    queryset = Vehiculo.objects.all()
+    serializer_class = VehiculoSerializer  # Para GET, POST, PUT, DELETE normales
 
     @action(detail=True, methods=['post'], url_path='asignar-casa', url_name='asignar_casa')
     def asignar_casa(self, request, pk=None):
-        vehiculo = self.get_object()
+        vehiculo = self.get_object()  # Obtiene el vehículo por pk
 
-        # Validar que el dueño del vehículo sea el mismo que hace la solicitud (opcional, según reglas de negocio)
-        # Si quieres permitir que solo administradores o propietarios asignen:
-        # if not request.user.is_superuser and request.user != vehiculo.dueno:
-        #     return Response({"error": "No tienes permiso para asignar esta casa."}, status=403)
-
-        serializer = AsignarCasaAVehiculoSerializer(data=request.data, context={'vehiculo': vehiculo})
+        # Usamos SOLO el serializer independiente para validar la entrada
+        serializer = AsignarCasaAVehiculoSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
 
-        return Response(VehiculoSerializer(vehiculo).data, status=status.HTTP_200_OK)
-    
+        # Guardamos la asignación/desasignación
+        updated_vehiculo = serializer.save(vehiculo=vehiculo)
+
+        # Devolvemos el vehículo actualizado con todos sus campos (incluyendo casa)
+        # Usamos VehiculoSerializer para la respuesta (porque queremos ver los detalles)
+        response_serializer = VehiculoSerializer(updated_vehiculo)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
 class AsignarResidenteACasaView(APIView):
     def post(self, request, casa_id):
         casa = Casa.objects.get(id=casa_id)
@@ -318,3 +366,73 @@ class AsignarResidenteACasaView(APIView):
             "message": "Residente asignado correctamente",
             "residente": ResidenteSerializer(residente).data
         }, status=status.HTTP_201_CREATED)
+
+class ComunicadoViewSet(viewsets.ModelViewSet):
+    queryset = Comunicado.objects.all().order_by('-fecha_publicacion', '-fecha_creacion')
+    serializer_class = ComunicadoSerializer
+    permission_classes = [IsAuthenticated]  # Solo usuarios autenticados
+
+    def get_queryset(self):
+        """
+        Opcional: Filtrar comunicados visibles para el usuario actual.
+        Si el usuario es residente, solo ver comunicados globales o dirigidos a su casa.
+        Si es administrador, ve todos.
+        """
+        user = self.request.user
+        queryset = Comunicado.objects.filter(estado='publicado')
+
+        # Si es administrador, puede ver todos (incluso borradores/archivados si lo deseas)
+        if hasattr(user, 'Administrador'):
+            return Comunicado.objects.all().order_by('-fecha_publicacion', '-fecha_creacion')
+
+        # Si es residente, filtrar por su casa o globales
+        try:
+            residente = user.residentes.first()  # Suponiendo que un usuario puede ser residente en una casa
+            if residente:
+                queryset = queryset.filter(
+                    models.Q(casa_destino=residente.casa) | models.Q(casa_destino__isnull=True)
+                )
+        except:
+            pass  # Si no es residente, solo ve globales
+
+        return queryset
+# views.py — Agrega al final
+
+from .models import ConceptoPago, Cuota, Pago
+from .serializers import ConceptoPagoSerializer, CuotaSerializer, PagoSerializer
+
+class ConceptoPagoViewSet(viewsets.ModelViewSet):
+    queryset = ConceptoPago.objects.all()
+    serializer_class = ConceptoPagoSerializer
+    permission_classes = [IsAuthenticated]  # Solo autenticados
+    # Opcional: solo administradores pueden crear/editar
+    # permission_classes = [IsAdministrador]
+
+
+class CuotaViewSet(viewsets.ModelViewSet):
+    queryset = Cuota.objects.select_related('concepto', 'casa').all()
+    serializer_class = CuotaSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['casa', 'estado', 'concepto', 'periodo']
+
+    # Opcional: acción para marcar como pagada
+    @action(detail=True, methods=['post'], url_path='marcar-pagada')
+    def marcar_pagada(self, request, pk=None):
+        cuota = self.get_object()
+        if cuota.estado == 'pagada':
+            return Response({'detail': 'Esta cuota ya está pagada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cuota.estado = 'pagada'
+        cuota.fecha_pago = timezone.now()
+        cuota.save()
+
+        return Response(CuotaSerializer(cuota).data, status=status.HTTP_200_OK)
+
+
+class PagoViewSet(viewsets.ModelViewSet):
+    queryset = Pago.objects.select_related('cuota', 'reserva', 'concepto', 'pagado_por').all()
+    serializer_class = PagoSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['cuota', 'reserva', 'concepto', 'pagado_por', 'metodo_pago']

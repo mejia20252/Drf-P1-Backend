@@ -7,7 +7,8 @@ from .views import  (RolViewSet, UsuarioViewSet, TelefonoViewSet, AdministradorV
         PersonalViewSet,MyTokenObtainPairView,LogoutView,GroupViewSet,AuthPermissionViewSet,
         PropietarioViewSet, InquilinoViewSet, CasaViewSet, ResidenteViewSet,
     AreaComunViewSet, ReservaViewSet, PagoReservaViewSet, TareaMantenimientoViewSet,
-    BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet
+    BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet,ComunicadoViewSet,ConceptoPagoViewSet,
+    CuotaViewSet,PagoViewSet
         )
 
 router = DefaultRouter()
@@ -20,7 +21,7 @@ router.register(r'grupos',        GroupViewSet,        basename='grupos')
 router.register(r'auth-permisos', AuthPermissionViewSet, basename='auth-permisos')
 router.register(r'propietarios', PropietarioViewSet)
 router.register(r'inquilinos', InquilinoViewSet)
-router.register(r'casas', CasaViewSet)
+router.register(r'casas', CasaViewSet, basename='casa')
 router.register(r'residentes', ResidenteViewSet)
 router.register(r'areas-comunes', AreaComunViewSet)
 router.register(r'reservas', ReservaViewSet)
@@ -30,7 +31,12 @@ router.register(r'bitacoras', BitacoraViewSet)
 router.register(r'detalle-bitacoras', DetalleBitacoraViewSet)
 router.register(r'mascotas', MascotaViewSet)
 router.register(r'vehiculos', VehiculoViewSet)
+router.register(r'comunicados', ComunicadoViewSet, basename='comunicado')  # 👈 AGREGA ESTO
+# urls.py — Dentro de la sección del router
 
+router.register(r'conceptos-pago', ConceptoPagoViewSet, basename='concepto-pago')
+router.register(r'cuotas', CuotaViewSet, basename='cuota')
+router.register(r'pagos', PagoViewSet, basename='pago')
 urlpatterns = [
     path("", include(router.urls)),
     path('login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),

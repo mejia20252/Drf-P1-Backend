@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     'app',
 
     # Django REST Framework # 0F
-    'rest_framework','corsheaders','rest_framework_simplejwt','rest_framework_simplejwt.token_blacklist',
+    'rest_framework','corsheaders','rest_framework_simplejwt','rest_framework_simplejwt.token_blacklist','django_filters',
     
 ]
 
@@ -159,7 +159,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_FILTER_BACKENDS': (
+        'django_filters.rest_framework.DjangoFilterBackend',  # Añadir esta línea
+    ),
      "EXCEPTION_HANDLER": "app.exceptions.custom_exception_handler"
+    
 
 }
 CORS_ALLOW_CREDENTIALS=True

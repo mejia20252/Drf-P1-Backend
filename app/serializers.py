@@ -9,7 +9,7 @@ from django.utils import timezone
 #login
 from .models import (
     Rol, Usuario, Telefono, Administrador, Personal,   Bitacora, DetalleBitacora, Mascota, Propietario, Inquilino,
-    Casa, AreaComun, Reserva, PagoReserva, TareaMantenimiento,
+    Casa, AreaComun, Reserva, PagoReserva, TareaMantenimiento,Comunicado,
     Vehiculo, Residente
 )
 from django.contrib.auth.models import Group, Permission as AuthPermission
@@ -365,7 +365,7 @@ class PropietarioSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Propietario
-        fields = ['id', 'usuario', 'usuario_id', 'fecha_adquisicion']
+        fields = [ 'usuario', 'usuario_id', 'fecha_adquisicion']
         extra_kwargs = {
             'fecha_adquisicion': {'required': False, 'allow_null': True},
         }
@@ -423,12 +423,16 @@ class PropietarioSerializer(serializers.ModelSerializer):
         return instance
 # Serializer para el modelo Residente
 class ResidenteSerializer(serializers.ModelSerializer):
-    usuario = UsuarioSerializer(read_only=True)
-    casa = serializers.SerializerMethodField()
-
     class Meta:
         model = Residente
-        fields = '__all__'
+        fields = [
+            'id',
+            'usuario',         # ← Nombre del campo en el modelo
+            'casa',            # ← Nombre del campo en el modelo
+            'rol_residencia',
+            'fecha_mudanza'
+        ]
+        read_only_fields = ['fecha_mudanza']
     
 class CasaSerializer(serializers.ModelSerializer):
     # Solo muestra el propietario como objeto anidado (lectura)
@@ -560,13 +564,37 @@ class AreaComunSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 # Serializer para el modelo Reserva
-class ReservaSerializer(serializers.ModelSerializer):
-    area_comun = AreaComunSerializer(read_only=True)
-    usuario = UsuarioSerializer(read_only=True)
+from rest_framework import serializers
+from .models import Reserva, AreaComun, Residente
 
+class ReservaSerializer(serializers.ModelSerializer):
+    # Campos para escritura (esperan IDs) y lectura (devuelven objetos serializados)
+    area_comun = serializers.PrimaryKeyRelatedField(
+        queryset=AreaComun.objects.all(),
+        # Esto hace que el campo se vea como 'area_comun' en la salida
+        # y acepte un ID en la entrada
+    )
+    residente = serializers.PrimaryKeyRelatedField(
+        queryset=Residente.objects.all(),
+        # El campo 'residente' es opcional en la API
+        allow_null=True,  # Permite que el valor de la base de datos sea NULL
+        required=False    # Hace que el campo sea opcional en las peticiones
+    )
+    
     class Meta:
         model = Reserva
-        fields = '__all__'
+        # La lista de `fields` debe incluir solo los nombres de los campos del modelo,
+        # ya que DRF los maneja automáticamente según el tipo de campo del serializador.
+        fields = [
+            'id',
+            'area_comun',
+            'residente',
+            'fecha',
+            'hora_inicio',
+            'hora_fin',
+            'estado',
+            'pagada',
+        ]
 
 # Serializer para el modelo PagoReserva
 class PagoReservaSerializer(serializers.ModelSerializer):
@@ -577,17 +605,30 @@ class PagoReservaSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 # Serializer para el modelo TareaMantenimiento
+from rest_framework import serializers
+from .models import TareaMantenimiento
+
 class TareaMantenimientoSerializer(serializers.ModelSerializer):
-    administrador_asigna = AdministradorSerializer(read_only=True)
-    personal_asignado = PersonalSerializer(read_only=True)
-    casa = CasaSerializer(read_only=True)
-    area_comun = AreaComunSerializer(read_only=True)
+    """
+    Serializer para el modelo TareaMantenimiento.
+    No incluye datos anidados para evitar complejidad innecesaria.
+    """
 
     class Meta:
         model = TareaMantenimiento
-        fields = '__all__'
-
-# serializers.py
+        fields = [
+            'id',
+            'titulo',
+            'descripcion',
+            'casa',
+            'area_comun',
+            'ubicacion_personalizada',
+            'prioridad',
+            'estado',
+            'fecha_creacion',
+            'costo_estimado',
+        ]
+        read_only_fields = ['fecha_creacion']
 
 # serializers.py - Actualiza VehiculoSerializer
 class VehiculoSerializer(serializers.ModelSerializer):
@@ -681,33 +722,34 @@ class AsignarPropietarioACasaSerializer(serializers.Serializer):
         return casa
 # serializers.py
 
+# serializers.py
+
 class AsignarCasaAVehiculoSerializer(serializers.Serializer):
-    casa_id = serializers.IntegerField(write_only=True, required=True)
+    casa_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     def validate_casa_id(self, value):
-        try:
-            casa = Casa.objects.get(id=value)
-        except Casa.DoesNotExist:
-            raise serializers.ValidationError("La casa con este ID no existe.")
-
-        # Opcional: Validar que la casa tenga un residente asociado al usuario dueño del vehículo
-        # Esto evita asignar vehículos a casas sin residentes
-        if not Residente.objects.filter(casa=casa).exists():
-            raise serializers.ValidationError(
-                "La casa no tiene ningún residente registrado. No se puede asignar un vehículo a una casa sin residente."
-            )
-
+        if value is not None:  # Si se envía un ID, validamos que exista
+            try:
+                casa = Casa.objects.get(id=value)
+            except Casa.DoesNotExist:
+                raise serializers.ValidationError("La casa con este ID no existe.")
+            
+            # Opcional: Validar que la casa tenga al menos un residente
+            if not Residente.objects.filter(casa=casa).exists():
+                raise serializers.ValidationError(
+                    "La casa no tiene ningún residente registrado. No se puede asignar un vehículo a una casa sin residente."
+                )
         return value
 
     def save(self, **kwargs):
-        vehiculo = kwargs['vehiculo']  # Pasado desde la vista
-        casa_id = self.validated_data['casa_id']
-        casa = Casa.objects.get(id=casa_id)
+        vehiculo = kwargs['vehiculo']  # Este viene de la vista, pasado por self.kwargs['pk']
+        casa_id = self.validated_data.get('casa_id')
 
-        vehiculo.casa = casa
-        vehiculo.save()
+        # Asignar o desasignar la casa
+        vehiculo.casa_id = casa_id  # Django permite asignar directamente el ID (FK)
+        vehiculo.save(update_fields=['casa'])  # Solo actualizamos el campo necesario
 
-        return vehiculo    
+        return vehiculo  
 class AsignarCasaAInquilinoSerializer(serializers.Serializer):
     casa_id = serializers.IntegerField(write_only=True, required=True)
 
@@ -847,3 +889,189 @@ class AsignarResidenteACasaSerializer(serializers.Serializer):
             residente.save()
 
         return residente
+
+
+class DesasignarPropietarioDeCasaSerializer(serializers.Serializer):
+    def save(self, **kwargs):
+        casa = kwargs['casa']  # Pasado desde la vista
+
+        if not casa.propietario:
+            raise serializers.ValidationError("Esta casa no tiene ningún propietario asignado.")
+
+        # Guardar el usuario antes de desasignar (para devolverlo en respuesta si se necesita)
+        usuario_anterior = casa.propietario.usuario
+
+        # Quitar propietario
+        casa.propietario = None
+        casa.save(update_fields=['propietario'])
+
+        # Actualizar Residente (si existe, lo marcamos como sin casa o eliminamos? → lo dejamos con casa=None)
+        Residente.objects.filter(
+            usuario=usuario_anterior,
+            casa=casa
+        ).update(casa=None, rol_residencia='propietario')  # Mantenemos registro histórico
+
+        return casa
+
+# ======== SERIALIZADOR DE LECTURA PARA PROPIETARIOS (SOLO LECTURA, SIN MODEL) ========
+class PropietarioDetalleSerializer(serializers.Serializer):
+    """
+    Serializador de solo lectura para mostrar detalles completos de un propietario.
+    No depende de ModelSerializer, así que evita conflictos con campos automáticos.
+    """
+
+    id = serializers.IntegerField(source='pk')
+    usuario_id = serializers.IntegerField(source='usuario.id')
+    usuario_nombre = serializers.CharField(source='usuario.nombre')
+    usuario_apellido_paterno = serializers.CharField(source='usuario.apellido_paterno')
+    usuario_apellido_materno = serializers.CharField(source='usuario.apellido_materno', allow_null=True)
+    usuario_email = serializers.EmailField(source='usuario.email')
+    usuario_rol = serializers.CharField(source='usuario.rol.nombre')
+    fecha_adquisicion = serializers.DateField(allow_null=True)  # <-- The fix is here!
+# ======== SERIALIZADOR DE LECTURA PARA CASAS CON PROPIETARIO DETALLADO ========
+class CasaConPropietarioDetalleSerializer(serializers.ModelSerializer):
+    propietario = PropietarioDetalleSerializer(read_only=True)
+
+    class Meta:
+        model = Casa
+        fields = [
+            'id',
+            'numero_casa',
+            'tipo_de_unidad',
+            'numero',
+            'area',
+            'propietario'
+        ]
+        extra_kwargs = {
+            'numero_casa': {'required': True},
+            'tipo_de_unidad': {'required': True},
+            'numero': {'required': True},
+            'area': {'required': True},
+        }
+class PropietarioUsuarioSerializer(UsuarioSerializer):
+    fecha_adquisicion = serializers.DateField(source='propietario.fecha_adquisicion', read_only=True)
+
+    class Meta(UsuarioSerializer.Meta):
+        fields = UsuarioSerializer.Meta.fields + ['fecha_adquisicion']
+class ComunicadoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comunicado
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion']  # Solo lectura, se asigna automáticamente
+
+    def validate(self, data):
+        """
+        Validación personalizada: Si está publicado, debe tener fecha_publicacion
+        """
+        estado = data.get('estado')
+        fecha_publicacion = data.get('fecha_publicacion')
+
+        if estado == 'publicado' and not fecha_publicacion:
+            raise serializers.ValidationError({
+                'fecha_publicacion': 'Debe especificar una fecha de publicación si el estado es "publicado".'
+            })
+
+        return data
+# serializers.py
+
+from rest_framework import serializers
+from .models import ConceptoPago
+
+class ConceptoPagoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConceptoPago
+        fields = [
+            'id',
+            'nombre',
+            'descripcion',
+            'es_fijo',
+            'monto_fijo',
+            'activo'
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        # Opcional: puedes formatear valores booleanos o agregar etiquetas
+        rep['es_fijo_label'] = "Fijo" if instance.es_fijo else "Variable"
+        rep['activo_label'] = "Activo" if instance.activo else "Inactivo"
+        return rep    
+from rest_framework import serializers
+from .models import Cuota
+
+class CuotaSerializer(serializers.ModelSerializer):
+    concepto = serializers.PrimaryKeyRelatedField(
+        queryset=ConceptoPago.objects.all()
+    )
+    casa = serializers.PrimaryKeyRelatedField(
+        queryset=Cuota._meta.get_field('casa').remote_field.model.objects.all()
+    )
+
+    class Meta:
+        model = Cuota
+        fields = [
+            'id',
+            'concepto',
+            'casa',
+            'monto',
+            'periodo',
+            'fecha_vencimiento',
+            'estado',
+            'fecha_pago',
+            'generada_automaticamente'
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        # Añadimos nombres/etiquetas útiles sin anidar
+        rep['concepto_nombre'] = instance.concepto.nombre if instance.concepto else None
+        rep['casa_numero'] = instance.casa.numero_casa if instance.casa else None
+        rep['estado_label'] = dict(Cuota._meta.get_field('estado').choices).get(instance.estado, instance.estado)
+        return rep
+from rest_framework import serializers
+from .models import Pago
+
+class PagoSerializer(serializers.ModelSerializer):
+    cuota = serializers.PrimaryKeyRelatedField(
+        queryset=Pago._meta.get_field('cuota').remote_field.model.objects.all(),
+        allow_null=True,
+        required=False
+    )
+    reserva = serializers.PrimaryKeyRelatedField(
+        queryset=Pago._meta.get_field('reserva').remote_field.model.objects.all(),
+        allow_null=True,
+        required=False
+    )
+    concepto = serializers.PrimaryKeyRelatedField(
+        queryset=ConceptoPago.objects.all()
+    )
+    pagado_por = serializers.PrimaryKeyRelatedField(
+        queryset=Pago._meta.get_field('pagado_por').remote_field.model.objects.all(),
+        allow_null=True,
+        required=False
+    )
+
+    class Meta:
+        model = Pago
+        fields = [
+            'id',
+            'cuota',
+            'reserva',
+            'concepto',
+            'monto',
+            'fecha_pago',
+            'metodo_pago',
+            'referencia',
+            'pagado_por',
+            'comprobante'
+        ]
+        read_only_fields = ['fecha_pago']
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        # Añadimos nombres/etiquetas útiles
+        rep['concepto_nombre'] = instance.concepto.nombre if instance.concepto else None
+        rep['metodo_pago_label'] = dict(Pago.METODO_PAGO_CHOICES).get(instance.metodo_pago, instance.metodo_pago)
+        rep['pagado_por_email'] = instance.pagado_por.email if instance.pagado_por else None
+        rep['cuota_id'] = instance.cuota.id if instance.cuota else None
+        rep['reserva_id'] = instance.reserva.id if instance.reserva else None
+        return rep
