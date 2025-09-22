@@ -1,18 +1,317 @@
 from django.db import models 
 from rest_framework import serializers
 #login
+from django.contrib.contenttypes.models import ContentType
 from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
-#login
 from .models import (
-    Rol, Usuario, Telefono, Administrador, Personal,   Bitacora, DetalleBitacora, Mascota, Propietario, Inquilino,
-    Casa, AreaComun, Reserva, PagoReserva, TareaMantenimiento,Comunicado,
-    Vehiculo, Residente
+    Rol, Usuario, Telefono,  Casa, ContratoArrendamiento,
+    Bitacora, DetalleBitacora, Residente, Mascota, AreaComun, Reserva,
+     TareaMantenimiento, Vehiculo, Comunicado, ConceptoPago,
+    Cuota, Propiedad,Pago
 )
 from django.contrib.auth.models import Group, Permission as AuthPermission
+class RolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Rol
+        fields = ['id', 'nombre']
+    def create(self, validated_data):
+        print("--- Inicio del método create() en RolSerializer ---")
+        
+        # 1. Extrae el nombre del rol
+        rol_name = validated_data.get('nombre')
+        print(f"1. Nombre de rol extraído: {rol_name}")
+
+        try:
+            # 2. Busca si ya existe un grupo con ese nombre
+            group = Group.objects.get(name=rol_name)
+            print(f"2. Grupo existente encontrado: {group.name}")
+        except Group.DoesNotExist:
+            print(f"2. ¡Advertencia! No se encontró un grupo llamado '{rol_name}'.")
+            # Podrías crear el grupo si no existe, o manejar el error
+            raise serializers.ValidationError(f"No existe un grupo con el nombre '{rol_name}'.")
+
+        # 3. Asigna el grupo existente al nuevo rol
+        print(f"3. Intentando crear el Rol con el grupo ID: {group.id}")
+        rol = Rol.objects.create(grupo=group, **validated_data)
+        
+        print("--- Rol creado exitosamente ---")
+        return rol
+#Cuando pones rol = RolSerializer(read_only=True), le estás diciendo a DRF:
+#“Este campo solo se usa para lectura. Ignora cualquier valor que venga en el payload de escritura (POST/PUT/PATCH).” 
+class UsuarioSerializer(serializers.ModelSerializer):
+    rol = serializers.PrimaryKeyRelatedField(
+        queryset=Rol.objects.all(),
+        required=True
+    )
+
+    class Meta:
+        model = Usuario
+        fields = [
+            'id', 'username', 'email', 'nombre', 'apellido_paterno', 'apellido_materno',
+            'sexo', 'direccion', 'fecha_nacimiento', 'rol', 'password'
+        ]
+        extra_kwargs = {
+            'password': {'write_only': True}
+        }
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        user = Usuario(**validated_data)
+        if password:
+            user.set_password(password)  # ✅ ESTO HASHEA LA CONTRASEÑA
+        user.save()
+        return user
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['rol_nombre'] = instance.rol.nombre if instance.rol else None
+        return rep
+
+class TelefonoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Telefono
+        fields = '__all__'
+
+
+
+class CasaSerializer(serializers.ModelSerializer):
+    propietario_actual = serializers.SerializerMethodField()
+    tiene_propietario_activo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Casa
+        fields = '__all__'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['propietario_actual'] = self.get_propietario_actual(instance)
+        data['tiene_propietario_activo'] = self.get_tiene_propietario_activo(instance)
+        return data
+
+    # ... tus métodos get_... siguen igual
+    # ... tus métodos get_... siguen igual
+    def get_propietario_actual(self, obj):
+        # Accede a la propiedad activa precargada
+        prop = getattr(obj, '_prefetched_objects_cache', {}).get('propiedades', [])
+        if prop:
+            prop = prop[0]  # Ya filtramos solo activas en el Prefetch
+            return {
+                'id': prop.propietario.id,
+                'nombre': f"{prop.propietario.nombre} {prop.propietario.apellido_paterno}",
+                'email': prop.propietario.email,
+                'rol': prop.propietario.rol.nombre if prop.propietario.rol else None
+            }
+        return None
+
+    def get_tiene_propietario_activo(self, obj):
+        prop = getattr(obj, '_prefetched_objects_cache', {}).get('propiedades', [])
+        return len(prop) > 0
+
+class ContratoArrendamientoSerializer(serializers.ModelSerializer):
+    # Campos de solo lectura para mostrar información relevante de las FK
+    arrendatario_nombre_completo = serializers.SerializerMethodField()
+    arrendatario_email = serializers.EmailField(source='arrendatario.email', read_only=True)
+    unidad_numero_casa = serializers.CharField(source='unidad.numero_casa', read_only=True)
+    unidad_tipo = serializers.CharField(source='unidad.tipo_de_unidad', read_only=True)
+    propietario_nombre_completo = serializers.SerializerMethodField()
+    propietario_email = serializers.EmailField(source='propietario.email', read_only=True)
+
+    class Meta:
+        model = ContratoArrendamiento
+        fields = [
+            'id', 'arrendatario', 'arrendatario_nombre_completo', 'arrendatario_email',
+            'unidad', 'unidad_numero_casa', 'unidad_tipo',
+            'propietario', 'propietario_nombre_completo', 'propietario_email',
+            'fecha_inicio', 'fecha_fin', 'esta_activo'
+        ]
+
+    def get_arrendatario_nombre_completo(self, obj):
+        if obj.arrendatario:
+            return f"{obj.arrendatario.nombre} {obj.arrendatario.apellido_paterno}".strip()
+        return None
+
+    def get_propietario_nombre_completo(self, obj):
+        if obj.propietario:
+            return f"{obj.propietario.nombre} {obj.propietario.apellido_paterno}".strip()
+        return None
+
+    def to_representation(self, instance):
+        # Obtiene la representación por defecto con los SerializerMethodField y Source
+        representation = super().to_representation(instance)
+        
+        # Opcional: puedes eliminar los IDs de las FK si solo quieres los nombres,
+        # pero es útil mantenerlos si el frontend necesita los IDs para hacer otras llamadas.
+        # Si quisieras eliminarlos, descomenta las siguientes líneas:
+        # representation.pop('arrendatario', None)
+        # representation.pop('unidad', None)
+        # representation.pop('propietario', None)
+
+        return representation
+
+class BitacoraSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bitacora
+        fields = '__all__'
+
+class DetalleBitacoraSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DetalleBitacora
+        fields = '__all__'
+
+class ResidenteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Residente
+        fields = '__all__'
+
+class MascotaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Mascota
+        fields = '__all__'
+
+class AreaComunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AreaComun
+        fields = '__all__'
+
+class ReservaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Reserva
+        fields = '__all__'
+
+
+
+class TareaMantenimientoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TareaMantenimiento
+        fields = '__all__'
+
+class VehiculoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Vehiculo
+        fields = ['id', 'placa', 'tipo', 'dueno', 'casa']
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        if instance.dueno:
+            rep['dueno_nombre_completo'] = f"{instance.dueno.nombre} {instance.dueno.apellido_paterno}"
+        else:
+            rep['dueno_nombre_completo'] = None
+        if instance.casa:
+            rep['casa_numero_casa'] = instance.casa.numero_casa
+        else:
+            rep['casa_numero_casa'] = None
+        return rep
+
+
+class ComunicadoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comunicado
+        fields = '__all__'
+
+class ConceptoPagoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConceptoPago
+        fields = '__all__'
+
+class CuotaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cuota
+        fields = '__all__'
+
+# serializers.py
+
+from rest_framework import serializers
+from .models import Propiedad, Casa, Usuario
+
+class PropiedadSerializer(serializers.ModelSerializer):
+    # Campos de solo lectura para mostrar info amigable
+    casa_numero = serializers.CharField(source='casa.numero_casa', read_only=True)
+    casa_descripcion = serializers.CharField(source='casa.__str__', read_only=True)
+    propietario_nombre = serializers.SerializerMethodField()
+    propietario_email = serializers.EmailField(source='propietario.email', read_only=True)
+
+    class Meta:
+        model = Propiedad
+        fields = [
+            'id',
+            'casa',
+            'casa_numero',
+            'casa_descripcion',
+            'propietario',
+            'propietario_nombre',
+            'propietario_email',
+            'fecha_adquisicion',
+            'fecha_transferencia',
+            'activa',
+        ]
+        read_only_fields = ['fecha_adquisicion']  # Solo se establece al crear
+
+    def get_propietario_nombre(self, obj):
+        return f"{obj.propietario.nombre} {obj.propietario.apellido_paterno}".strip()
+
+    def validate_propietario(self, value):
+        """Valida que el usuario seleccionado tenga rol 'Propietario'."""
+        if not hasattr(value, 'rol') or value.rol.nombre != 'Propietario':
+            raise serializers.ValidationError("El usuario seleccionado debe tener el rol de 'Propietario'.")
+        return value
+
+    def validate(self, data):
+        casa = data.get('casa')
+        activa = data.get('activa', True)  # Por defecto, asumimos True si no se envía
+        propietario = data.get('propietario')
+
+        if not casa:
+            raise serializers.ValidationError({"casa": "La casa es requerida."})
+
+        if not propietario:
+            raise serializers.ValidationError({"propietario": "El propietario es requerido."})
+
+        # Si se está creando o activando una propiedad
+        if activa:
+            # Verificar que no exista otra propiedad activa para esta casa
+            propiedad_activa_existente = Propiedad.objects.filter(
+                casa=casa,
+                activa=True
+            )
+
+            # Si estamos actualizando, excluir el registro actual
+            if self.instance:
+                propiedad_activa_existente = propiedad_activa_existente.exclude(pk=self.instance.pk)
+
+            if propiedad_activa_existente.exists():
+                prop_existente = propiedad_activa_existente.first()
+                raise serializers.ValidationError({
+                    'activa': f"La casa ya tiene un propietario activo: {prop_existente.propietario.email}. "
+                              f"Primero desactive esa propiedad antes de activar una nueva."
+                })
+
+        # Si se está desactivando, asegurarse de que se proporcione fecha_transferencia
+        if not activa and not data.get('fecha_transferencia'):
+            raise serializers.ValidationError({
+                'fecha_transferencia': "Debe proporcionar la fecha de transferencia al desactivar una propiedad."
+            })
+
+        return data
+
+    def create(self, validated_data):
+        # Si no se envía fecha_transferencia y activa=False, podríamos asignarla automáticamente
+        if not validated_data.get('activa', True) and not validated_data.get('fecha_transferencia'):
+            from django.utils import timezone
+            validated_data['fecha_transferencia'] = timezone.now().date()
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Si se está desactivando y no hay fecha_transferencia, asignarla
+        if not validated_data.get('activa', instance.activa) and not validated_data.get('fecha_transferencia'):
+            if instance.activa:  # Solo si estaba activa y ahora se desactiva
+                from django.utils import timezone
+                validated_data['fecha_transferencia'] = timezone.now().date()
+
+        return super().update(instance, validated_data)
 
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -47,255 +346,7 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError({"non_field_errors": "No tienes permiso para cambiar esta contraseña."})
 
         return attrs
-class RolSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Rol
-        fields = ['id', 'nombre']
-
-    def create(self, validated_data):
-        print("--- Inicio del método create() en RolSerializer ---")
-        
-        # 1. Extrae el nombre del rol
-        rol_name = validated_data.get('nombre')
-        print(f"1. Nombre de rol extraído: {rol_name}")
-
-        try:
-            # 2. Busca si ya existe un grupo con ese nombre
-            group = Group.objects.get(name=rol_name)
-            print(f"2. Grupo existente encontrado: {group.name}")
-        except Group.DoesNotExist:
-            print(f"2. ¡Advertencia! No se encontró un grupo llamado '{rol_name}'.")
-            # Podrías crear el grupo si no existe, o manejar el error
-            raise serializers.ValidationError(f"No existe un grupo con el nombre '{rol_name}'.")
-
-        # 3. Asigna el grupo existente al nuevo rol
-        print(f"3. Intentando crear el Rol con el grupo ID: {group.id}")
-        rol = Rol.objects.create(grupo=group, **validated_data)
-        
-        print("--- Rol creado exitosamente ---")
-        return rol
-
-class UsuarioSerializer(serializers.ModelSerializer):
-    # Campos adicionales según rol (solo para escritura)
-    rol_nombre = serializers.CharField(write_only=True, required=True)
-    #Inquilino    
-    fecha_inicio_contrato = serializers.DateField(required=False, allow_null=True)
-    fecha_fin_contrato = serializers.DateField(required=False, allow_null=True)
-
-    fecha_adquisicion = serializers.DateField(required=False, allow_null=True)
-    numero_licencia = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
-    tipo_personal = serializers.ChoiceField(choices=[
-        'seguridad', 'mantenimiento', 'limpieza', 'jardineria'
-    ], required=False, allow_null=True)
-    fecha_ingreso = serializers.DateField(required=False, allow_null=True)
-    salario = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
-    fecha_certificacion = serializers.DateField(required=False, allow_null=True)
-    empresa = serializers.CharField(max_length=255, required=False, allow_null=True, allow_blank=True)
-    # Para lectura: muestra el rol completo
-    rol = RolSerializer(read_only=True)
-
-    class Meta:
-        model = Usuario
-        fields = [
-            'id', 'username', 'email', 'nombre', 'apellido_paterno', 'apellido_materno',
-            'sexo', 'direccion', 'fecha_nacimiento', 'rol', 'rol_nombre',
-            'fecha_inicio_contrato', 'fecha_fin_contrato',
-            'fecha_adquisicion',
-            'numero_licencia',
-            'tipo_personal', 'fecha_ingreso', 'salario',
-            'password',  # 👈 Incluye password aquí para CREATE
-            'fecha_certificacion',
-            'empresa',
-           
-        ]
-        extra_kwargs = {
-            'password': {'write_only': True},
-            'email': {'required': False, 'allow_blank': True},
-            'nombre': {'required': True},
-            'apellido_paterno': {'required': True},
-            'apellido_materno': {'required': True},
-        }
-
-    def validate(self, data):
-        rol_nombre = data.get('rol_nombre')
-        errors = {}
-
-        # Verificar que el rol exista
-        try:
-            rol_obj = Rol.objects.get(nombre=rol_nombre)
-            data['rol_obj'] = rol_obj
-        except Rol.DoesNotExist:
-            raise serializers.ValidationError({
-                "rol_nombre": f"El rol '{rol_nombre}' no existe en el sistema."
-            })
-
-        # Validaciones específicas por rol
-        if rol_nombre == "Inquilino":
-            if not data.get('fecha_inicio_contrato'):
-                errors['fecha_inicio_contrato'] = ['Este campo es obligatorio para Inquilinos.']
-            if not data.get('fecha_fin_contrato'):
-                errors['fecha_fin_contrato'] = ['Este campo es obligatorio para Inquilinos.']
-            if data.get('fecha_inicio_contrato') and data.get('fecha_fin_contrato'):
-                if data['fecha_fin_contrato'] < data['fecha_inicio_contrato']:
-                    errors['fecha_fin_contrato'] = ['La fecha de fin no puede ser anterior a la de inicio.']
-
-        elif rol_nombre == "Propietario":
-            if not data.get('fecha_adquisicion'):
-                errors['fecha_adquisicion'] = ['Este campo es obligatorio para Propietarios.']
-
-        elif rol_nombre == "Administrador":
-            if not data.get('numero_licencia') or not data['numero_licencia'].strip():
-                errors['numero_licencia'] = ['Este campo es obligatorio para Administradores.']
-
-        elif rol_nombre == "Personal":
-            if not data.get('tipo_personal'):
-                errors['tipo_personal'] = ['Este campo es obligatorio para Personal.']
-            if not data.get('fecha_ingreso'):
-                errors['fecha_ingreso'] = ['Este campo es obligatorio para Personal.']
-            if data.get('salario') is not None and data['salario'] < 0:
-                errors['salario'] = ['El salario no puede ser negativo.']
-
-        if errors:
-            raise serializers.ValidationError(errors)
-
-        return data
-
-    def create(self, validated_data):
-        # Extraer campos dinámicos
-        fecha_inicio_contrato = validated_data.pop('fecha_inicio_contrato', None)
-        fecha_fin_contrato = validated_data.pop('fecha_fin_contrato', None)
-        fecha_adquisicion = validated_data.pop('fecha_adquisicion', None)
-        numero_licencia = validated_data.pop('numero_licencia', None)
-        tipo_personal = validated_data.pop('tipo_personal', None)
-        fecha_ingreso = validated_data.pop('fecha_ingreso', None)
-        salario = validated_data.pop('salario', None)
-
-        # Extraer el nombre del rol y obtener el objeto Rol
-        rol_nombre = validated_data.pop('rol_nombre')
-        rol_obj = validated_data.pop('rol_obj')
-
-        # Crear usuario
-        password = validated_data.pop('password')
-        usuario = Usuario.objects.create_user(password=password, **validated_data)
-
-        # Asignar rol
-        usuario.rol = rol_obj
-        usuario.save()
-
-        # Crear modelo específico según rol
-        if rol_nombre == "Inquilino":
-            Inquilino.objects.create(
-                usuario=usuario,
-                fecha_inicio_contrato=fecha_inicio_contrato,
-                fecha_fin_contrato=fecha_fin_contrato
-            )
-        elif rol_nombre == "Propietario":
-            Propietario.objects.create(
-                usuario=usuario,
-                fecha_adquisicion=fecha_adquisicion
-            )
-        elif rol_nombre == "Administrador":
-            Administrador.objects.create(
-                usuario=usuario,
-                numero_licencia=numero_licencia,
-                fecha_certificacion=None
-            )
-        elif rol_nombre == "Personal":
-            Personal.objects.create(
-                usuario=usuario,
-                tipo=tipo_personal,
-                fecha_ingreso=fecha_ingreso,
-                salario=salario
-            )
-
-        return usuario
-
-    def update(self, instance, validated_data):
-        # Evitar cambiar el rol después de creado
-        if 'rol_nombre' in validated_data:
-            raise serializers.ValidationError({"rol_nombre": "No se permite cambiar el rol después de la creación."})
-
-        # Extraer campos dinámicos
-        fecha_inicio_contrato = validated_data.pop('fecha_inicio_contrato', None)
-        fecha_fin_contrato = validated_data.pop('fecha_fin_contrato', None)
-        fecha_adquisicion = validated_data.pop('fecha_adquisicion', None)
-        numero_licencia = validated_data.pop('numero_licencia', None)
-        tipo_personal = validated_data.pop('tipo_personal', None)
-        fecha_ingreso = validated_data.pop('fecha_ingreso', None)
-        salario = validated_data.pop('salario', None)
-
-        # Actualizar campos básicos
-        password = validated_data.pop('password', None)
-        if password:
-            instance.set_password(password)
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        # Actualizar modelo específico según rol actual
-        rol_nombre = instance.rol.nombre
-
-        if rol_nombre == "Inquilino":
-            inquilino, created = Inquilino.objects.get_or_create(usuario=instance)
-            if fecha_inicio_contrato is not None:
-                inquilino.fecha_inicio_contrato = fecha_inicio_contrato
-            if fecha_fin_contrato is not None:
-                inquilino.fecha_fin_contrato = fecha_fin_contrato
-            inquilino.save()
-
-        elif rol_nombre == "Propietario":
-            propietario, created = Propietario.objects.get_or_create(usuario=instance)
-            if fecha_adquisicion is not None:
-                propietario.fecha_adquisicion = fecha_adquisicion
-            propietario.save()
-
-        elif rol_nombre == "Administrador":
-            admin, created = Administrador.objects.get_or_create(usuario=instance)
-            if numero_licencia is not None:
-                admin.numero_licencia = numero_licencia
-            admin.save()
-
-        elif rol_nombre == "Personal":
-            personal, created = Personal.objects.get_or_create(usuario=instance)
-            if tipo_personal is not None:
-                personal.tipo = tipo_personal
-            if fecha_ingreso is not None:
-                personal.fecha_ingreso = fecha_ingreso
-            if salario is not None:
-                personal.salario = salario
-            personal.save()
-
-        return instance
-
-
-# Serializer para el modelo Usuario
-# Nota: Aquí puedes decidir qué campos exponer. Excluir el 'password' es una buena práctica para la mayoría de las respuestas.
-
-class TelefonoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Telefono
-        fields = '__all__'
-
-# Serializer para el modelo Administrador
-class AdministradorSerializer(serializers.ModelSerializer):
-    # Usamos el UsuarioSerializer como campo anidado para ver los detalles del usuario
-    usuario = UsuarioSerializer()
-
-    class Meta:
-        model = Administrador
-        fields = '__all__'
-
-# Serializer para el modelo Personal
-class PersonalSerializer(serializers.ModelSerializer):
-    usuario = UsuarioSerializer()
-
-    class Meta:
-        model = Personal
-        fields = '__all__'
-
-
-
+    
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
     def validate(self, attrs):
@@ -316,11 +367,12 @@ class MyTokenPairSerializer(TokenObtainPairSerializer):
             raise AuthenticationFailed('ingrese su contrase;a correctemetn')
         
             
-        return super().validate(attrs)
+        return super().validate(attrs)  
 class AuthPermissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuthPermission
-        fields = ['id', 'codename', 'name']    
+        fields = ['id', 'codename', 'name'] 
+              
 class GroupSerializer(serializers.ModelSerializer):
     permissions = serializers.PrimaryKeyRelatedField(
         queryset=AuthPermission.objects.all(),
@@ -330,339 +382,6 @@ class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = ['id', 'name', 'permissions']
-
-
-
-# Serializer para el modelo Bitacora
-class BitacoraSerializer(serializers.ModelSerializer):
-    usuario = UsuarioSerializer(read_only=True)
-
-    class Meta:
-        model = Bitacora
-        fields = '__all__'
-
-# Serializer para el modelo DetalleBitacora
-class DetalleBitacoraSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DetalleBitacora
-        fields = '__all__'
-
-# Serializer para el modelo Mascota
-class MascotaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Mascota
-        fields = '__all__'
-
-# serializers.py
-
-# SERIALIZADOR ÚNICO Y CORRECTO PARA PROPIETARIO
-class PropietarioSerializer(serializers.ModelSerializer):
-    # Campo de escritura: ID del usuario al que se le asignará el rol de propietario
-    usuario_id = serializers.IntegerField(write_only=True, required=True)
-
-    # Campo de lectura: muestra los detalles completos del usuario
-    usuario = UsuarioSerializer(read_only=True)
-
-    class Meta:
-        model = Propietario
-        fields = [ 'usuario', 'usuario_id', 'fecha_adquisicion']
-        extra_kwargs = {
-            'fecha_adquisicion': {'required': False, 'allow_null': True},
-        }
-
-    def validate_usuario_id(self, value):
-        """Validar que el usuario exista y no sea ya propietario."""
-        try:
-            usuario = Usuario.objects.get(id=value)
-        except Usuario.DoesNotExist:
-            raise serializers.ValidationError("El usuario con este ID no existe.")
-
-        # Verificar que no sea ya propietario
-        if hasattr(usuario, 'propietario'):
-            raise serializers.ValidationError("Este usuario ya es propietario.")
-
-        # Verificar que no tenga otro rol activo que impida ser propietario
-        if usuario.rol and usuario.rol.nombre in ['Administrador', 'Personal']:
-            raise serializers.ValidationError(
-                f"El usuario tiene rol '{usuario.rol.nombre}' y no puede ser propietario."
-            )
-
-        return value
-
-    def create(self, validated_data):
-        usuario_id = validated_data.pop('usuario_id')
-        usuario = Usuario.objects.get(id=usuario_id)
-
-        try:
-            rol_propietario = Rol.objects.get(nombre="Propietario")
-        except Rol.DoesNotExist:
-            raise serializers.ValidationError({
-                "usuario_id": "El rol 'Propietario' no está configurado en el sistema. Contacte al administrador."
-            })
-
-        usuario.rol = rol_propietario
-        usuario.save(update_fields=['rol'])
-
-        propietario = Propietario.objects.create(usuario=usuario, **validated_data)
-
-        Residente.objects.get_or_create(
-            usuario=usuario,
-            casa=None,
-            rol_residencia='propietario',
-            defaults={'fecha_mudanza': timezone.now()}
-        )
-
-        return propietario
-
-    def update(self, instance, validated_data):
-        if 'usuario_id' in validated_data:
-            raise serializers.ValidationError({"usuario_id": "No se puede cambiar el usuario después de la creación."})
-
-        instance.fecha_adquisicion = validated_data.get('fecha_adquisicion', instance.fecha_adquisicion)
-        instance.save()
-        return instance
-# Serializer para el modelo Residente
-class ResidenteSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Residente
-        fields = [
-            'id',
-            'usuario',         # ← Nombre del campo en el modelo
-            'casa',            # ← Nombre del campo en el modelo
-            'rol_residencia',
-            'fecha_mudanza'
-        ]
-        read_only_fields = ['fecha_mudanza']
-    
-class CasaSerializer(serializers.ModelSerializer):
-    # Solo muestra el propietario como objeto anidado (lectura)
-    propietario = PropietarioSerializer(read_only=True)
-
-    class Meta:
-        model = Casa
-        fields = [
-            'id',
-            'numero_casa',
-            'tipo_de_unidad',
-            'numero',
-            'area',
-            'propietario'
-        ]
-        extra_kwargs = {
-            'numero_casa': {'required': True},
-            'tipo_de_unidad': {'required': True},
-            'numero': {'required': True},
-            'area': {'required': True},
-        }
-
-    # Elimina cualquier validación o lógica relacionada con 'propietario_nombre'
-    # Ya no necesitamos eso aquí, porque no vamos a asignar propietarios desde este serializer
-    def validate(self, data):
-        propietario_nombre = data.get('propietario_nombre')
-        if propietario_nombre:
-            # Validar que exista un Propietario con ese nombre o email
-            try:
-                usuario = Usuario.objects.filter(
-                    models.Q(nombre__icontains=propietario_nombre) |
-                    models.Q(email__iexact=propietario_nombre)
-                ).get()
-                propietario = Propietario.objects.get(usuario=usuario)
-                data['propietario_obj'] = propietario
-            except Usuario.DoesNotExist:
-                raise serializers.ValidationError({
-                    "propietario_nombre": f"No se encontró ningún usuario con nombre o email '{propietario_nombre}'."
-                })
-            except Propietario.DoesNotExist:
-                raise serializers.ValidationError({
-                    "propietario_nombre": f"El usuario '{propietario_nombre}' existe, pero no es un Propietario."
-                })
-        return data
-
-    def create(self, validated_data):
-        # Extraer el propietario si se envió
-        propietario_obj = validated_data.pop('propietario_obj', None)
-
-        # Crear la casa (sin propietario aún)
-        casa = Casa.objects.create(**validated_data)
-
-        # Si se proporcionó un propietario, asignarlo y crear Residente
-        if propietario_obj:
-            casa.propietario = propietario_obj
-            casa.save()
-
-            # ✅ CREAR RESIDENTE (¡Importante! Mantén coherencia de datos)
-            Residente.objects.get_or_create(
-                usuario=propietario_obj.usuario,
-                casa=casa,
-                rol_residencia='propietario',
-                defaults={'fecha_mudanza': timezone.now()}
-            )
-
-        return casa
-
-    def update(self, instance, validated_data):
-        propietario_nombre = validated_data.pop('propietario_nombre', None)
-
-        if propietario_nombre:
-            try:
-                usuario = Usuario.objects.filter(
-                    models.Q(nombre__icontains=propietario_nombre) |
-                    models.Q(email__iexact=propietario_nombre)
-                ).get()
-                propietario = Propietario.objects.get(usuario=usuario)
-
-                # Actualizar propietario de la casa
-                instance.propietario = propietario
-                instance.save()
-
-                # Actualizar o crear Residente
-                residente, created = Residente.objects.get_or_create(
-                    usuario=propietario.usuario,
-                    casa=instance,
-                    defaults={
-                        'rol_residencia': 'propietario',
-                        'fecha_mudanza': timezone.now()
-                    }
-                )
-                if not created:
-                    residente.rol_residencia = 'propietario'
-                    residente.save()
-
-            except Usuario.DoesNotExist:
-                raise serializers.ValidationError({
-                    "propietario_nombre": f"Usuario '{propietario_nombre}' no encontrado."
-                })
-            except Propietario.DoesNotExist:
-                raise serializers.ValidationError({
-                    "propietario_nombre": f"El usuario '{propietario_nombre}' no es un propietario registrado."
-                })
-
-        # Actualizar campos normales de Casa
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        return instance
-
-
-
-
-
-# Serializer para el modelo Inquilino
-# app/serializers.py
-from rest_framework import serializers
-from django.contrib.auth import get_user_model
-from .models import Inquilino, Usuario, Rol
-
-# Obtener el modelo de usuario activo
-User = get_user_model()
-
-
-class AreaComunSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AreaComun
-        fields = '__all__'
-
-# Serializer para el modelo Reserva
-from rest_framework import serializers
-from .models import Reserva, AreaComun, Residente
-
-class ReservaSerializer(serializers.ModelSerializer):
-    # Campos para escritura (esperan IDs) y lectura (devuelven objetos serializados)
-    area_comun = serializers.PrimaryKeyRelatedField(
-        queryset=AreaComun.objects.all(),
-        # Esto hace que el campo se vea como 'area_comun' en la salida
-        # y acepte un ID en la entrada
-    )
-    residente = serializers.PrimaryKeyRelatedField(
-        queryset=Residente.objects.all(),
-        # El campo 'residente' es opcional en la API
-        allow_null=True,  # Permite que el valor de la base de datos sea NULL
-        required=False    # Hace que el campo sea opcional en las peticiones
-    )
-    
-    class Meta:
-        model = Reserva
-        # La lista de `fields` debe incluir solo los nombres de los campos del modelo,
-        # ya que DRF los maneja automáticamente según el tipo de campo del serializador.
-        fields = [
-            'id',
-            'area_comun',
-            'residente',
-            'fecha',
-            'hora_inicio',
-            'hora_fin',
-            'estado',
-            'pagada',
-        ]
-
-# Serializer para el modelo PagoReserva
-class PagoReservaSerializer(serializers.ModelSerializer):
-    reserva = ReservaSerializer(read_only=True)
-
-    class Meta:
-        model = PagoReserva
-        fields = '__all__'
-
-# Serializer para el modelo TareaMantenimiento
-from rest_framework import serializers
-from .models import TareaMantenimiento
-
-class TareaMantenimientoSerializer(serializers.ModelSerializer):
-    """
-    Serializer para el modelo TareaMantenimiento.
-    No incluye datos anidados para evitar complejidad innecesaria.
-    """
-
-    class Meta:
-        model = TareaMantenimiento
-        fields = [
-            'id',
-            'titulo',
-            'descripcion',
-            'casa',
-            'area_comun',
-            'ubicacion_personalizada',
-            'prioridad',
-            'estado',
-            'fecha_creacion',
-            'costo_estimado',
-        ]
-        read_only_fields = ['fecha_creacion']
-
-# serializers.py - Actualiza VehiculoSerializer
-class VehiculoSerializer(serializers.ModelSerializer):
-    # Para escritura: aceptamos el ID del usuario
-    dueno_id = serializers.IntegerField(write_only=True, required=True)
-    
-    # Para lectura: mostramos los detalles completos
-    dueno = UsuarioSerializer(read_only=True)
-    casa = CasaSerializer(read_only=True)
-
-    class Meta:
-        model = Vehiculo
-        fields = [
-            'id',
-            'placa',
-            'tipo',
-            'dueno',
-            'casa',
-            'dueno_id'  # 👈 Incluido aquí
-        ]
-        extra_kwargs = {
-            'placa': {'required': True},
-            'tipo': {'required': True},
-        }
-
-    def create(self, validated_data):
-        dueno_id = validated_data.pop('dueno_id')
-        usuario = Usuario.objects.get(id=dueno_id)
-        vehiculo = Vehiculo.objects.create(
-            dueno=usuario,
-            **validated_data
-        )
-        return vehiculo
-
 class UsuarioMeSerializer(serializers.ModelSerializer):
     """
     Serializador exclusivo para el endpoint '/usuarios/me/'.
@@ -682,396 +401,253 @@ class UsuarioMeSerializer(serializers.ModelSerializer):
             "fecha_nacimiento",
             "rol",
         ]
-
-
-
-
-# serializers.py
-
-class AsignarPropietarioACasaSerializer(serializers.Serializer):
-    usuario_id = serializers.IntegerField(write_only=True, required=True)
-
-    def validate_usuario_id(self, value):
-        try:
-            usuario = Usuario.objects.get(id=value)
-        except Usuario.DoesNotExist:
-            raise serializers.ValidationError("El usuario con este ID no existe.")
-
-        if not hasattr(usuario, 'propietario'):
-            raise serializers.ValidationError("Este usuario no es un propietario registrado.")
-
-        return value
-
-    def save(self, **kwargs):
-        casa = kwargs['casa']  # Lo pasamos desde la vista
-        usuario_id = self.validated_data['usuario_id']
-        usuario = Usuario.objects.get(id=usuario_id)
-        propietario = usuario.propietario
-
-        casa.propietario = propietario
-        casa.save()
-
-        # Asegurar que exista el Residente
-        Residente.objects.get_or_create(
-            usuario=usuario,
-            casa=casa,
-            rol_residencia='propietario',
-            defaults={'fecha_mudanza': timezone.now()}
-        )
-
-        return casa
-# serializers.py
-
-# serializers.py
-
-class AsignarCasaAVehiculoSerializer(serializers.Serializer):
-    casa_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-
-    def validate_casa_id(self, value):
-        if value is not None:  # Si se envía un ID, validamos que exista
-            try:
-                casa = Casa.objects.get(id=value)
-            except Casa.DoesNotExist:
-                raise serializers.ValidationError("La casa con este ID no existe.")
-            
-            # Opcional: Validar que la casa tenga al menos un residente
-            if not Residente.objects.filter(casa=casa).exists():
-                raise serializers.ValidationError(
-                    "La casa no tiene ningún residente registrado. No se puede asignar un vehículo a una casa sin residente."
-                )
-        return value
-
-    def save(self, **kwargs):
-        vehiculo = kwargs['vehiculo']  # Este viene de la vista, pasado por self.kwargs['pk']
-        casa_id = self.validated_data.get('casa_id')
-
-        # Asignar o desasignar la casa
-        vehiculo.casa_id = casa_id  # Django permite asignar directamente el ID (FK)
-        vehiculo.save(update_fields=['casa'])  # Solo actualizamos el campo necesario
-
-        return vehiculo  
-class AsignarCasaAInquilinoSerializer(serializers.Serializer):
-    casa_id = serializers.IntegerField(write_only=True, required=True)
-
-    def validate_casa_id(self, value):
-        try:
-            casa = Casa.objects.get(id=value)
-        except Casa.DoesNotExist:
-            raise serializers.ValidationError("La casa con este ID no existe.")
-        
-        # Opcional: Validar que la casa no tenga ya un propietario
-        if casa.propietario:
-            raise serializers.ValidationError("Esta casa ya tiene un propietario asignado.")
-
-        return value
-
-    def save(self, **kwargs):
-        inquilino = kwargs['inquilino']  # Pasado desde la vista
-        casa_id = self.validated_data['casa_id']
-        casa = Casa.objects.get(id=casa_id)
-
-        # Actualizar la relación en el modelo Inquilino (opcional, si lo deseas)
-        # Puedes agregar un campo `casa` en Inquilino si lo necesitas
-        # Pero por ahora, solo actualizamos el Residente
-
-        # ✅ ACTUALIZAR EL RESIDENTE ASOCIADO AL USUARIO
-        residente, created = Residente.objects.get_or_create(
-            usuario=inquilino.usuario,
-            defaults={
-                'casa': casa,
-                'rol_residencia': 'inquilino',
-                'fecha_mudanza': timezone.now()
-            }
-        )
-
-        if not created:
-            residente.casa = casa
-            residente.rol_residencia = 'inquilino'
-            residente.save()
-
-        return residente
-class InquilinoSerializer(serializers.ModelSerializer):
-    # Campo de escritura: ID del usuario que será inquilino
-    usuario_id = serializers.IntegerField(write_only=True, required=True)
-
-    # Campo de lectura: muestra los detalles completos del usuario
-    usuario = UsuarioSerializer(read_only=True)
-
-    class Meta:
-        model = Inquilino
-        fields = ['id', 'usuario', 'usuario_id', 'fecha_inicio_contrato', 'fecha_fin_contrato']
-        extra_kwargs = {
-            'fecha_inicio_contrato': {'required': True},
-            'fecha_fin_contrato': {'required': True},
-        }
-
-    def validate_usuario_id(self, value):
-        try:
-            usuario = Usuario.objects.get(id=value)
-        except Usuario.DoesNotExist:
-            raise serializers.ValidationError("El usuario con este ID no existe.")
-
-        # Verificar que no sea ya inquilino
-        if hasattr(usuario, 'inquilino'):
-            raise serializers.ValidationError("Este usuario ya es inquilino.")
-
-        # Verificar que no tenga otro rol activo que impida ser inquilino
-        if usuario.rol and usuario.rol.nombre in ['Administrador', 'Personal']:
-            raise serializers.ValidationError(
-                f"El usuario tiene rol '{usuario.rol.nombre}' y no puede ser inquilino."
-            )
-
-        return value
-
-    def create(self, validated_data):
-        usuario_id = validated_data.pop('usuario_id')
-        usuario = Usuario.objects.get(id=usuario_id)
-
-        try:
-            rol_inquilino = Rol.objects.get(nombre="Inquilino")
-        except Rol.DoesNotExist:
-            raise serializers.ValidationError({
-                "usuario_id": "El rol 'Inquilino' no está configurado en el sistema. Contacte al administrador."
-            })
-
-        usuario.rol = rol_inquilino
-        usuario.save(update_fields=['rol'])
-
-        inquilino = Inquilino.objects.create(usuario=usuario, **validated_data)
-
-        # ✅ ¡CREAR RESIDENTE AL CREAR INQUILINO!
-        # Aunque aún no tenga casa, lo creamos con casa=None
-        Residente.objects.get_or_create(
-            usuario=usuario,
-            casa=None,
-            rol_residencia='inquilino',
-            defaults={'fecha_mudanza': timezone.now()}
-        )
-
-        return inquilino
-
-    def update(self, instance, validated_data):
-        if 'usuario_id' in validated_data:
-            raise serializers.ValidationError({"usuario_id": "No se puede cambiar el usuario después de la creación."})
-
-        instance.fecha_inicio_contrato = validated_data.get('fecha_inicio_contrato', instance.fecha_inicio_contrato)
-        instance.fecha_fin_contrato = validated_data.get('fecha_fin_contrato', instance.fecha_fin_contrato)
-        instance.save()
-
-        return instance    
-class AsignarResidenteACasaSerializer(serializers.Serializer):
-    usuario_id = serializers.IntegerField(write_only=True, required=True)
-    rol_residencia = serializers.ChoiceField(choices=Residente.ROL_RESIDENCIA_CHOICES)
-
-    def validate_usuario_id(self, value):
-        try:
-            usuario = Usuario.objects.get(id=value)
-        except Usuario.DoesNotExist:
-            raise serializers.ValidationError("El usuario no existe.")
-        return value
-
-    def save(self, **kwargs):
-        casa = kwargs['casa']
-        usuario_id = self.validated_data['usuario_id']
-        rol = self.validated_data['rol_residencia']
-
-        residente, created = Residente.objects.get_or_create(
-            usuario_id=usuario_id,
-            casa=casa,
-            defaults={
-                'rol_residencia': rol,
-                'fecha_mudanza': timezone.now()
-            }
-        )
-
-        if not created:
-            residente.rol_residencia = rol
-            residente.save()
-
-        return residente
-
-
-class DesasignarPropietarioDeCasaSerializer(serializers.Serializer):
-    def save(self, **kwargs):
-        casa = kwargs['casa']  # Pasado desde la vista
-
-        if not casa.propietario:
-            raise serializers.ValidationError("Esta casa no tiene ningún propietario asignado.")
-
-        # Guardar el usuario antes de desasignar (para devolverlo en respuesta si se necesita)
-        usuario_anterior = casa.propietario.usuario
-
-        # Quitar propietario
-        casa.propietario = None
-        casa.save(update_fields=['propietario'])
-
-        # Actualizar Residente (si existe, lo marcamos como sin casa o eliminamos? → lo dejamos con casa=None)
-        Residente.objects.filter(
-            usuario=usuario_anterior,
-            casa=casa
-        ).update(casa=None, rol_residencia='propietario')  # Mantenemos registro histórico
-
-        return casa
-
-# ======== SERIALIZADOR DE LECTURA PARA PROPIETARIOS (SOLO LECTURA, SIN MODEL) ========
-class PropietarioDetalleSerializer(serializers.Serializer):
-    """
-    Serializador de solo lectura para mostrar detalles completos de un propietario.
-    No depende de ModelSerializer, así que evita conflictos con campos automáticos.
-    """
-
-    id = serializers.IntegerField(source='pk')
-    usuario_id = serializers.IntegerField(source='usuario.id')
-    usuario_nombre = serializers.CharField(source='usuario.nombre')
-    usuario_apellido_paterno = serializers.CharField(source='usuario.apellido_paterno')
-    usuario_apellido_materno = serializers.CharField(source='usuario.apellido_materno', allow_null=True)
-    usuario_email = serializers.EmailField(source='usuario.email')
-    usuario_rol = serializers.CharField(source='usuario.rol.nombre')
-    fecha_adquisicion = serializers.DateField(allow_null=True)  # <-- The fix is here!
-# ======== SERIALIZADOR DE LECTURA PARA CASAS CON PROPIETARIO DETALLADO ========
-class CasaConPropietarioDetalleSerializer(serializers.ModelSerializer):
-    propietario = PropietarioDetalleSerializer(read_only=True)
-
-    class Meta:
-        model = Casa
-        fields = [
-            'id',
-            'numero_casa',
-            'tipo_de_unidad',
-            'numero',
-            'area',
-            'propietario'
-        ]
-        extra_kwargs = {
-            'numero_casa': {'required': True},
-            'tipo_de_unidad': {'required': True},
-            'numero': {'required': True},
-            'area': {'required': True},
-        }
-class PropietarioUsuarioSerializer(UsuarioSerializer):
-    fecha_adquisicion = serializers.DateField(source='propietario.fecha_adquisicion', read_only=True)
-
-    class Meta(UsuarioSerializer.Meta):
-        fields = UsuarioSerializer.Meta.fields + ['fecha_adquisicion']
-class ComunicadoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Comunicado
-        fields = '__all__'
-        read_only_fields = ['fecha_creacion']  # Solo lectura, se asigna automáticamente
-
-    def validate(self, data):
-        """
-        Validación personalizada: Si está publicado, debe tener fecha_publicacion
-        """
-        estado = data.get('estado')
-        fecha_publicacion = data.get('fecha_publicacion')
-
-        if estado == 'publicado' and not fecha_publicacion:
-            raise serializers.ValidationError({
-                'fecha_publicacion': 'Debe especificar una fecha de publicación si el estado es "publicado".'
-            })
-
-        return data
-# serializers.py
-
-from rest_framework import serializers
-from .models import ConceptoPago
-
-class ConceptoPagoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ConceptoPago
-        fields = [
-            'id',
-            'nombre',
-            'descripcion',
-            'es_fijo',
-            'monto_fijo',
-            'activo'
-        ]
-
-    def to_representation(self, instance):
-        rep = super().to_representation(instance)
-        # Opcional: puedes formatear valores booleanos o agregar etiquetas
-        rep['es_fijo_label'] = "Fijo" if instance.es_fijo else "Variable"
-        rep['activo_label'] = "Activo" if instance.activo else "Inactivo"
-        return rep    
-from rest_framework import serializers
-from .models import Cuota
-
-class CuotaSerializer(serializers.ModelSerializer):
-    concepto = serializers.PrimaryKeyRelatedField(
-        queryset=ConceptoPago.objects.all()
-    )
-    casa = serializers.PrimaryKeyRelatedField(
-        queryset=Cuota._meta.get_field('casa').remote_field.model.objects.all()
-    )
-
-    class Meta:
-        model = Cuota
-        fields = [
-            'id',
-            'concepto',
-            'casa',
-            'monto',
-            'periodo',
-            'fecha_vencimiento',
-            'estado',
-            'fecha_pago',
-            'generada_automaticamente'
-        ]
-
-    def to_representation(self, instance):
-        rep = super().to_representation(instance)
-        # Añadimos nombres/etiquetas útiles sin anidar
-        rep['concepto_nombre'] = instance.concepto.nombre if instance.concepto else None
-        rep['casa_numero'] = instance.casa.numero_casa if instance.casa else None
-        rep['estado_label'] = dict(Cuota._meta.get_field('estado').choices).get(instance.estado, instance.estado)
-        return rep
-from rest_framework import serializers
-from .models import Pago
-
 class PagoSerializer(serializers.ModelSerializer):
-    cuota = serializers.PrimaryKeyRelatedField(
-        queryset=Pago._meta.get_field('cuota').remote_field.model.objects.all(),
-        allow_null=True,
-        required=False
-    )
-    reserva = serializers.PrimaryKeyRelatedField(
-        queryset=Pago._meta.get_field('reserva').remote_field.model.objects.all(),
-        allow_null=True,
-        required=False
-    )
-    concepto = serializers.PrimaryKeyRelatedField(
-        queryset=ConceptoPago.objects.all()
-    )
-    pagado_por = serializers.PrimaryKeyRelatedField(
-        queryset=Pago._meta.get_field('pagado_por').remote_field.model.objects.all(),
-        allow_null=True,
-        required=False
-    )
+    # Campos de solo lectura para mostrar información relacionada
+    usuario_nombre = serializers.SerializerMethodField()
+    tipo_pago_display = serializers.CharField(source='get_tipo_pago_display', read_only=True)
+    metodo_pago_display = serializers.CharField(source='get_metodo_pago_display', read_only=True)
+    
+    # Campos para el objeto genérico relacionado
+    objeto_relacionado_tipo = serializers.SerializerMethodField()
+    objeto_relacionado_id = serializers.SerializerMethodField()
+    objeto_relacionado_descripcion = serializers.SerializerMethodField()
 
     class Meta:
         model = Pago
         fields = [
-            'id',
-            'cuota',
-            'reserva',
-            'concepto',
-            'monto',
-            'fecha_pago',
-            'metodo_pago',
-            'referencia',
-            'pagado_por',
-            'comprobante'
+            'id', 'usuario', 'usuario_nombre', 'tipo_pago', 'tipo_pago_display',
+            'monto', 'fecha_pago', 'metodo_pago', 'metodo_pago_display',
+            'referencia', 'comprobante', 'observaciones',
+            'objeto_relacionado_tipo', 'objeto_relacionado_id', 'objeto_relacionado_descripcion'
         ]
-        read_only_fields = ['fecha_pago']
+        read_only_fields = ['fecha_pago', 'comprobante'] # El comprobante se genera por la señal
+
+    def get_usuario_nombre(self, obj):
+        if obj.usuario:
+            return f"{obj.usuario.nombre} {obj.usuario.apellido_paterno}".strip()
+        return None
+    
+    def get_objeto_relacionado_tipo(self, obj):
+        if obj.content_object:
+            return obj.content_object._meta.verbose_name
+        return None
+
+    def get_objeto_relacionado_id(self, obj):
+        if obj.content_object:
+            return obj.content_object.id
+        return None
+        
+    def get_objeto_relacionado_descripcion(self, obj):
+        if obj.content_object:
+            # Aquí puedes personalizar cómo quieres describir cada tipo de objeto.
+            # Por ejemplo, para una Cuota podrías mostrar el concepto y la casa.
+            # Para una Reserva, el área común y la fecha.
+            if isinstance(obj.content_object, Cuota):
+                return f"{obj.content_object.concepto.nombre} - Casa {obj.content_object.casa.numero_casa} ({obj.content_object.get_estado_display()})"
+            elif isinstance(obj.content_object, Reserva):
+                return f"Reserva de {obj.content_object.area_comun.nombre} el {obj.content_object.fecha} ({obj.content_object.get_estado_display()})"
+            # Añade más casos si tienes otros tipos de objetos relacionados
+            return str(obj.content_object) # Fallback a la representación por defecto del objeto
+        return None
+
+    def create(self, validated_data):
+        # Si el tipo de pago es 'cuota' o 'reserva', asegúrate de que el content_object
+        # y content_type se asignen correctamente. Esto es importante si el pago no viene de Stripe
+        # y quieres crear pagos de forma manual a través de la API.
+        tipo_pago = validated_data.get('tipo_pago')
+        content_object = validated_data.pop('content_object', None) # Extraer si se pasó en validated_data
+
+        if content_object:
+            validated_data['content_type'] = ContentType.objects.get_for_model(content_object)
+            validated_data['object_id'] = content_object.id
+        elif tipo_pago in ['cuota', 'reserva'] and not (validated_data.get('content_type') and validated_data.get('object_id')):
+            # Si es un pago de cuota o reserva, y no se proporcionó el objeto genérico,
+            # deberías validar que se asigne correctamente, o lanzar un error.
+            # Para este ejemplo, lo dejaremos pasar, asumiendo que el frontend o Stripe lo gestiona.
+            # En un caso real de creación manual, necesitarías campos para `cuota_id` o `reserva_id`.
+            pass # Aquí puedes añadir lógica de validación más estricta si es necesario
+
+        return super().create(validated_data)
+
+    # Puedes sobrescribir `to_internal_value` si necesitas un manejo especial de
+    # cómo se reciben los datos para el content_object durante la creación o actualización.
+    # Por ahora, el serializador genérico de Django REST Framework debería manejarlo bien
+    # si se envía `content_type` y `object_id` directamente, o si se maneja en `create` como arriba.
+
+class AsignarCasaAVehiculoSerializer(serializers.Serializer):
+    """
+    Serializer para asignar o desasignar una casa a un vehículo.
+    """
+    casa = serializers.PrimaryKeyRelatedField(
+        queryset=Casa.objects.all(),
+        allow_null=True,  # Permite desasignar la casa
+        required=False    # Puede ser opcional si el objetivo es solo desasignar
+    )
+
+    def validate_casa(self, value):
+        # The PrimaryKeyRelatedField already handles fetching the Casa instance
+        # if a valid ID is provided, or sets it to None if allow_null is True
+        # and the value is null/empty. So this custom validation might be redundant
+        # unless you have specific additional checks.
+        return value
+
+    def save(self, **kwargs):
+        vehiculo = kwargs.get('vehiculo')
+        if not vehiculo:
+            raise serializers.ValidationError("Se requiere un objeto Vehiculo para esta operación.")
+
+        # self.validated_data.get('casa') will directly give you the Casa instance or None
+        # because PrimaryKeyRelatedField handles the conversion.
+        new_casa_instance = self.validated_data.get('casa')
+        
+        vehiculo.casa = new_casa_instance
+        vehiculo.save()
+        
+        return vehiculo
+from rest_framework import serializers
+from .models import PerfilTrabajador, TareaMantenimiento, AsignacionTarea, Usuario # Importa los modelos necesarios
+
+# --- Serializer para PerfilTrabajador ---
+class PerfilTrabajadorSerializer(serializers.ModelSerializer):
+    # Campos de solo lectura para mostrar información amigable del usuario
+    usuario_nombre_completo = serializers.SerializerMethodField()
+    usuario_email = serializers.EmailField(source='usuario.email', read_only=True)
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True)
+
+    # Campos de solo lectura para mostrar información del supervisor
+    supervisor_nombre_completo = serializers.SerializerMethodField()
+    supervisor_email = serializers.EmailField(source='supervisor.email', read_only=True)
+
+    class Meta:
+        model = PerfilTrabajador
+        fields = [
+            'id', 'usuario', 'usuario_nombre_completo', 'usuario_email', 'usuario_username',
+            'especialidades', 'activo', 'fecha_contratacion', 'salario', 'horario_laboral',
+            'supervisor', 'supervisor_nombre_completo', 'supervisor_email', 'observaciones'
+        ]
+        read_only_fields = ['fecha_contratacion'] # La fecha se auto-establece al crear
+
+    def get_usuario_nombre_completo(self, obj):
+        if obj.usuario:
+            return f"{obj.usuario.nombre} {obj.usuario.apellido_paterno}".strip()
+        return None
+
+    def get_supervisor_nombre_completo(self, obj):
+        if obj.supervisor:
+            return f"{obj.supervisor.nombre} {obj.supervisor.apellido_paterno}".strip()
+        return None
+
+    def validate_usuario(self, value):
+        """Valida que el usuario seleccionado para el perfil sea único (OneToOneField)"""
+        if self.instance and self.instance.usuario == value:
+            return value # Si es el mismo usuario en una actualización, no hay problema
+        
+        # Si se está creando o cambiando el usuario, verifica que no tenga ya un PerfilTrabajador
+        if PerfilTrabajador.objects.filter(usuario=value).exists():
+            raise serializers.ValidationError("Este usuario ya tiene un perfil de trabajador asignado.")
+        return value
+
+    def validate_supervisor(self, value):
+        """Valida que el supervisor, si se proporciona, tenga el rol de 'Administrador'."""
+        if value and (not hasattr(value, 'rol') or value.rol.nombre != 'Administrador'):
+            raise serializers.ValidationError("El supervisor debe tener el rol de 'Administrador'.")
+        return value
 
     def to_representation(self, instance):
-        rep = super().to_representation(instance)
-        # Añadimos nombres/etiquetas útiles
-        rep['concepto_nombre'] = instance.concepto.nombre if instance.concepto else None
-        rep['metodo_pago_label'] = dict(Pago.METODO_PAGO_CHOICES).get(instance.metodo_pago, instance.metodo_pago)
-        rep['pagado_por_email'] = instance.pagado_por.email if instance.pagado_por else None
-        rep['cuota_id'] = instance.cuota.id if instance.cuota else None
-        rep['reserva_id'] = instance.reserva.id if instance.reserva else None
-        return rep
+        # La representación ya incluye los SerializerMethodField, no necesitas hacer nada extra aquí
+        return super().to_representation(instance)
+
+
+# --- Serializer para AsignacionTarea ---
+class AsignacionTareaSerializer(serializers.ModelSerializer):
+    # Campos de solo lectura para mostrar información amigable
+    tarea_titulo = serializers.CharField(source='tarea.titulo', read_only=True)
+    tarea_estado = serializers.CharField(source='tarea.estado', read_only=True)
+    trabajador_nombre_completo = serializers.SerializerMethodField()
+    trabajador_email = serializers.EmailField(source='trabajador.usuario.email', read_only=True)
+    asignado_por_nombre_completo = serializers.SerializerMethodField()
+    asignado_por_email = serializers.EmailField(source='asignado_por.email', read_only=True)
+    estado_asignacion_display = serializers.CharField(source='get_estado_asignacion_display', read_only=True)
+
+    class Meta:
+        model = AsignacionTarea
+        fields = [
+            'id', 'tarea', 'tarea_titulo', 'tarea_estado',
+            'trabajador', 'trabajador_nombre_completo', 'trabajador_email',
+            'asignado_por', 'asignado_por_nombre_completo', 'asignado_por_email',
+            'fecha_asignacion', 'fecha_completado', 'estado_asignacion', 'estado_asignacion_display',
+            'observaciones'
+        ]
+        read_only_fields = ['fecha_asignacion', 'fecha_completado']
+
+    def get_trabajador_nombre_completo(self, obj):
+        if obj.trabajador and obj.trabajador.usuario:
+            return f"{obj.trabajador.usuario.nombre} {obj.trabajador.usuario.apellido_paterno}".strip()
+        return None
+
+    def get_asignado_por_nombre_completo(self, obj):
+        if obj.asignado_por:
+            return f"{obj.asignado_por.nombre} {obj.asignado_por.apellido_paterno}".strip()
+        return None
+
+    def validate(self, data):
+        # Validación para unique_together ('tarea', 'trabajador', 'estado_asignacion')
+        tarea = data.get('tarea')
+        trabajador = data.get('trabajador')
+        estado_asignacion = data.get('estado_asignacion', 'activa') # Si no se envía, se asume 'activa' por defecto del modelo
+
+        # Si se está creando o actualizando a 'activa'
+        if estado_asignacion == 'activa':
+            # Contar asignaciones activas existentes para esta tarea y trabajador
+            existing_active_assignments = AsignacionTarea.objects.filter(
+                tarea=tarea,
+                trabajador=trabajador,
+                estado_asignacion='activa'
+            )
+
+            if self.instance: # Si es una actualización, excluye la instancia actual
+                existing_active_assignments = existing_active_assignments.exclude(pk=self.instance.pk)
+
+            if existing_active_assignments.exists():
+                raise serializers.ValidationError(
+                    f"El trabajador '{trabajador.usuario.nombre}' ya tiene una asignación activa para la tarea '{tarea.titulo}'."
+                )
+
+        # Si se completa una tarea, valida que no haya asignaciones activas pendientes
+        # Esta lógica está también en el save del modelo, pero puede ser útil replicarla aquí
+        # para dar feedback antes de la base de datos.
+        if estado_asignacion == 'completada' and self.instance and self.instance.estado_asignacion == 'activa':
+            # Se permite que se complete, la lógica del modelo se encargará de actualizar la tarea.
+            pass
+        
+        # Aquí puedes añadir más validaciones si, por ejemplo, solo un administrador
+        # puede asignar o cancelar tareas.
+        request = self.context.get('request', None)
+        if request and request.user and not request.user.is_superuser and request.user.rol and request.user.rol.nombre != 'Administrador':
+            # Los no-admins solo pueden cambiar el estado a 'completada' si son el trabajador asignado
+            if self.instance and self.instance.trabajador.usuario != request.user:
+                raise serializers.ValidationError("Solo el trabajador asignado puede completar esta tarea.")
+            
+            # Los no-admins no pueden crear nuevas asignaciones (solo los administradores)
+            if not self.instance: # Si es una operación de creación
+                 raise serializers.ValidationError("Solo los administradores pueden crear nuevas asignaciones de tareas.")
+
+        return data
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and request.user:
+            validated_data['asignado_por'] = request.user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Si se intenta cambiar el trabajador o la tarea, es mejor denegarlo
+        # o manejarlo como una reasignación compleja (crear nueva, desactivar anterior)
+        if 'tarea' in validated_data and instance.tarea != validated_data['tarea']:
+            raise serializers.ValidationError({"tarea": "No se permite cambiar la tarea de una asignación existente. Considere crear una nueva asignación."})
+        if 'trabajador' in validated_data and instance.trabajador != validated_data['trabajador']:
+            raise serializers.ValidationError({"trabajador": "No se permite cambiar el trabajador de una asignación existente. Considere reasignar (crear nueva)."})
+
+        # Si el estado_asignacion cambia a 'completada' y no se envía fecha_completado, el modelo lo establecerá.
+        # Si se está desactivando o cancelando, la lógica del modelo se encarga de no establecer fecha_completado
+        return super().update(instance, validated_data)

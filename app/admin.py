@@ -5,9 +5,6 @@ from .models import (
     Rol,
     Usuario,
     Telefono,
-    Administrador,
-    Personal,
-   
     Bitacora,
     DetalleBitacora,
 )
@@ -57,18 +54,7 @@ class TelefonoAdmin(admin.ModelAdmin):
     list_filter = ('tipo',)
     search_fields = ('numero',)
 
-# Registramos otros modelos con clases Admin personalizadas para una mejor experiencia de usuario.
-@admin.register(Administrador)
-class AdministradorAdmin(admin.ModelAdmin):
-    list_display = ('usuario', 'numero_licencia', 'empresa', 'activo')
-    list_filter = ('activo', 'fecha_certificacion')
-    search_fields = ('usuario__email', 'numero_licencia')
 
-@admin.register(Personal)
-class PersonalAdmin(admin.ModelAdmin):
-    list_display = ('usuario', 'tipo', 'salario', 'fecha_ingreso', 'activo')
-    list_filter = ('tipo', 'activo')
-    search_fields = ('usuario__email',)
 
 
 @admin.register(Bitacora)

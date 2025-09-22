@@ -25,9 +25,9 @@ class IsAdministrador(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user and request.user.is_superuser
 
-class IsCliente(permissions.BasePermission):
+class IsPropietario(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.rol.nombre == 'Cliente'
+        return request.user and request.user.rol.nombre == 'Propietario'
 
 class IsPersonal(permissions.BasePermission):
     def has_permission(self, request, view):

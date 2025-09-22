@@ -13,10 +13,20 @@ import os
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+import stripe 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
+STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY')
+STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY')
+STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET')
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+# En settings.py, temporalmente:
+print(f"STRIPE_PUBLISHABLE_KEY: {STRIPE_PUBLISHABLE_KEY}")
+print(f"STRIPE_SECRET_KEY: {STRIPE_SECRET_KEY}")
+print(f"FRONTEND_URL: {FRONTEND_URL}")
+print(f"STRIPE_WEBHOOK_SECRET: {STRIPE_WEBHOOK_SECRET}")
+stripe.api_key = STRIPE_SECRET_KEY
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -66,10 +76,11 @@ ROOT_URLCONF = 'drf_p1_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
+        'DIRS': [os.path.join(BASE_DIR, 'templates')], # If you have a global templates dir
+        'APP_DIRS': True, # Important for finding templates in app/templates/
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
