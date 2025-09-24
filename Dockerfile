@@ -8,9 +8,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Dependencias de compilación (solo en build stage)
+# Dependencias de compilación para Python packages AND WeasyPrint system dependencies
+# Install system dependencies needed for WeasyPrint at build time (some might be linked by cffi)
+# and also those needed at runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    pkg-config \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libgdk-pixbuf2.0-dev \
+    libffi-dev \
+    shared-mime-info \
+    libharfbuzz-icu \
+    # The libgobject-2.0-0 library is typically provided by libgirepository-1.0-1,
+    # or as a dependency of pango/cairo, but explicitly listing potential providers
+    # or general dev packages can help. `gir1.2-glib-2.0` also provides it.
+    # libgirepository-1.0-1 is the runtime package.
+    # We'll install runtime versions here as well for completeness, as some python packages might
+    # link against them even during pip install
+    libgirepository-1.0-1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Virtualenv aislado para copiar a la imagen final
@@ -32,6 +48,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 WORKDIR /app
+
+# Install ONLY the runtime system dependencies for WeasyPrint
+# No need for -dev packages here, just the libraries themselves.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libffi8 \
+    shared-mime-info \
+    libharfbuzz-icu \
+    libgirepository-1.0-1 \
+ # Ensure fonts are available for rendering
+    fonts-dejavu \
+    fonts-liberation \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copiamos el venv ya construido
 COPY --from=builder /venv /venv
