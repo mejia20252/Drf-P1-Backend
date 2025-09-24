@@ -16,16 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libcairo2-dev \
     libpango1.0-dev \
-    libgdk-pixbuf2.0-dev \
+    libgdk-pixbuf-xlib-2.0-dev \
     libffi-dev \
     shared-mime-info \
-    libharfbuzz-icu \
-    # The libgobject-2.0-0 library is typically provided by libgirepository-1.0-1,
-    # or as a dependency of pango/cairo, but explicitly listing potential providers
-    # or general dev packages can help. `gir1.2-glib-2.0` also provides it.
-    # libgirepository-1.0-1 is the runtime package.
-    # We'll install runtime versions here as well for completeness, as some python packages might
-    # link against them even during pip install
+    libharfbuzz-dev \
+    libicu-dev \
     libgirepository-1.0-1 \
  && rm -rf /var/lib/apt/lists/*
 
@@ -55,10 +50,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf-xlib-2.0-0 \
     libffi8 \
     shared-mime-info \
-    libharfbuzz-icu \
+    libharfbuzz0b \
+    libicu72 \
     libgirepository-1.0-1 \
  # Ensure fonts are available for rendering
     fonts-dejavu \
