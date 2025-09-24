@@ -8,19 +8,29 @@ from .views import  (RolViewSet, UsuarioViewSet, TelefonoViewSet,
          CasaViewSet, ResidenteViewSet,
     AreaComunViewSet, ReservaViewSet, TareaMantenimientoViewSet,PerfilTrabajadorViewSet, AsignacionTareaViewSet,
     BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet,ComunicadoViewSet,ConceptoPagoViewSet,
-    CuotaViewSet,PagoViewSet,PropiedadViewSet, PropiedadesDelPropietarioView,ContratoArrendamientoViewSet
+    CuotaViewSet,PagoViewSet,PropiedadViewSet, PropiedadesDelPropietarioView,ContratoArrendamientoViewSet,
+
+
+    DispositivoMovilViewSet, NotificacionPushViewSet, IncidenteSeguridadIAViewSet
         )
 
 router = DefaultRouter()
-router.register(r'contratos-arrendamiento', ContratoArrendamientoViewSet, basename='contrato-arrendamiento')
 router.register(r"roles", RolViewSet)
-router.register(r'perfiles-trabajador', PerfilTrabajadorViewSet)
-router.register(r'asignaciones-tarea', AsignacionTareaViewSet)
 router.register(r"usuarios", UsuarioViewSet)
 router.register(r"telefonos", TelefonoViewSet, basename="telefono") # Add
 router.register(r'grupos',        GroupViewSet,        basename='grupos')
 router.register(r'auth-permisos', AuthPermissionViewSet, basename='auth-permisos')
+
+
+router.register(r'dispositivos', DispositivoMovilViewSet, basename='dispositivo')
+router.register(r'notificaciones', NotificacionPushViewSet, basename='notificacion')
+router.register(r'incidentes', IncidenteSeguridadIAViewSet, basename='incidente')
+
 router.register(r'casas', CasaViewSet, basename='casa')
+router.register(r'contratos-arrendamiento', ContratoArrendamientoViewSet, basename='contrato-arrendamiento')
+router.register(r'perfiles-trabajador', PerfilTrabajadorViewSet)
+router.register(r'asignaciones-tarea', AsignacionTareaViewSet)
+
 router.register(r'residentes', ResidenteViewSet)
 router.register(r'areas-comunes', AreaComunViewSet)
 router.register(r'reservas', ReservaViewSet)

@@ -27,6 +27,7 @@ print(f"STRIPE_SECRET_KEY: {STRIPE_SECRET_KEY}")
 print(f"FRONTEND_URL: {FRONTEND_URL}")
 print(f"STRIPE_WEBHOOK_SECRET: {STRIPE_WEBHOOK_SECRET}")
 stripe.api_key = STRIPE_SECRET_KEY
+FIREBASE_CREDENTIALS_PATH=r"C:\Users\Usuario\Documents\si2_projects\P1\DRF-P1-Backend\si2-p1-firebase-adminsdk-fbsvc-33c74a4bb7.json"
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 

@@ -1,5 +1,6 @@
 from django.db import models 
 from rest_framework import serializers
+from django.contrib.auth.hashers import check_password
 #login
 from django.contrib.contenttypes.models import ContentType
 from rest_framework.exceptions import AuthenticationFailed
@@ -55,7 +56,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
             'sexo', 'direccion', 'fecha_nacimiento', 'rol', 'password'
         ]
         extra_kwargs = {
-            'password': {'write_only': True}
+            'password': {'write_only': True,'required': False}
         }
 
     def create(self, validated_data):
@@ -65,6 +66,22 @@ class UsuarioSerializer(serializers.ModelSerializer):
             user.set_password(password)  # ✅ ESTO HASHEA LA CONTRASEÑA
         user.save()
         return user
+    def update(self, instance, validated_data):
+        # 1. Handle password separately
+        password = validated_data.pop('password', None)
+        if password:
+            instance.set_password(password)
+        
+        # 2. Call super().update() for other fields
+        # This will update all fields present in validated_data
+        updated_instance = super().update(instance, validated_data)
+        
+        # 3. Save the instance if password was changed
+        if password:
+            updated_instance.save() # Save only if password was updated, otherwise super().update might have saved.
+                                   # More robust: always save at the end if you perform a set_password.
+        
+        return updated_instance
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -76,6 +93,109 @@ class TelefonoSerializer(serializers.ModelSerializer):
         model = Telefono
         fields = '__all__'
 
+class MyTokenPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):#@
+        username=attrs.get(self.username_field) or attrs.get('username')
+        password=attrs.get('password')
+        User=get_user_model()
+        user=User.objects.filter(username=username).first()
+        print(user)
+        if not user:
+            raise AuthenticationFailed('el usuario no existe')
+        if not user.check_password(password):
+            raise AuthenticationFailed('ingrese su contrase;a correctemetn')
+        
+            
+        return super().validate(attrs)
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+    def validate(self, attrs):
+        self.token = attrs['refresh']
+        return attrs
+    def save(self, **kwargs):
+        RefreshToken(self.token).blacklist()
+class GroupSerializer(serializers.ModelSerializer):
+    permissions = serializers.PrimaryKeyRelatedField(
+        queryset=AuthPermission.objects.all(),
+        many=True
+    )
+
+    class Meta:
+        model = Group
+        fields = ['id', 'name', 'permissions']
+class UsuarioMeSerializer(serializers.ModelSerializer):
+    """
+    Serializador exclusivo para el endpoint '/usuarios/me/'.
+    """
+    rol = RolSerializer(read_only=True) # Utiliza el RolSerializer para serializar el objeto completo
+
+    class Meta:
+        model = Usuario
+        fields = [
+            "id",
+            "username",
+            "nombre",
+            "apellido_paterno",
+            "apellido_materno",
+            "sexo",
+            "email",
+            "fecha_nacimiento",
+            "rol",
+        ]
+class AuthPermissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuthPermission
+        fields = ['id', 'codename', 'name']
+class ChangePasswordSerializer(serializers.Serializer):
+    # current_password será requerido condicionalmente, no por defecto
+    current_password = serializers.CharField(required=False, write_only=True)
+    new_password = serializers.CharField(min_length=6, write_only=True)
+    confirm_new_password = serializers.CharField(min_length=6, write_only=True)
+
+    def validate(self, data):
+        request = self.context.get("request")
+        target_user = self.context.get("user") # Este es el usuario CUYA contraseña se va a cambiar
+
+        # Verificación de que new_password y confirm_new_password coinciden
+        if data["new_password"] != data["confirm_new_password"]:
+            raise serializers.ValidationError({"confirm_new_password": "Las nuevas contraseñas no coinciden."})
+
+        # Si el usuario que hace la solicitud es un administrador (o superuser)
+        # y no está cambiando su propia contraseña, O si es un superuser
+        # podemos omitir la verificación de current_password.
+        # Asumimos que un rol de ID 1 es "Administrador". Ajusta esto si tu ID de rol es diferente.
+        is_request_user_admin = (request and request.user.is_authenticated and
+                                 (request.user.is_superuser or (hasattr(request.user, 'rol') and request.user.rol and request.user.rol.nombre == 'Administrador')))
+        
+        # Lógica para cambiar la contraseña de otro usuario (solo para administradores)
+        if target_user != request.user: # Si el usuario objetivo NO es el usuario autenticado
+            if not is_request_user_admin:
+                # Un usuario común no puede cambiar la contraseña de otro
+                raise serializers.ValidationError({"detail": "No tienes permiso para cambiar la contraseña de otro usuario."})
+            
+            # Si es un administrador cambiando la contraseña de otro, no necesita current_password del target_user
+            # Tampoco necesitamos la current_password del administrador que hace la solicitud aquí.
+            data.pop('current_password', None) # Asegurarse de que no esté en los validated_data si se envió por error
+        
+        # Lógica para cambiar la propia contraseña (requiere current_password)
+        else: # target_user == request.user (el usuario está cambiando su propia contraseña)
+            current_password = data.get("current_password")
+            
+            # Si el usuario es administrador y está cambiando su propia contraseña,
+            # no le requerimos current_password. (Esto es una elección, se podría requerir por seguridad)
+            # Aquí, por la consigna, no lo requerimos si es admin.
+            if is_request_user_admin and target_user == request.user:
+                 data.pop('current_password', None) # Quitarlo si se envió, no es necesario
+            elif not current_password:
+                raise serializers.ValidationError({"current_password": "Obligatoria para cambiar tu propia contraseña."})
+            elif not check_password(current_password, target_user.password): # Usar check_password para comparar
+                raise serializers.ValidationError({"current_password": "Contraseña actual incorrecta."})
+            
+            if data["new_password"] == current_password:
+                raise serializers.ValidationError({"new_password": "La nueva contraseña no puede ser igual a la actual."})
+
+        return data
+    
 
 
 class CasaSerializer(serializers.ModelSerializer):
@@ -152,10 +272,7 @@ class ContratoArrendamientoSerializer(serializers.ModelSerializer):
 
         return representation
 
-class BitacoraSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Bitacora
-        fields = '__all__'
+
 
 class DetalleBitacoraSerializer(serializers.ModelSerializer):
     class Meta:
@@ -313,94 +430,12 @@ class PropiedadSerializer(serializers.ModelSerializer):
 
         return super().update(instance, validated_data)
 
-class ChangePasswordSerializer(serializers.Serializer):
-    current_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    new_password = serializers.CharField(write_only=True, min_length=6)
-    confirm_new_password = serializers.CharField(write_only=True)
 
-    def validate(self, attrs):
-        request = self.context["request"]
-        target_user = self.context["user"]          # usuario al que se le cambia la contraseña
-        current = attrs.get("current_password") or ""
-        new = attrs["new_password"]
-        confirm = attrs["confirm_new_password"]
-
-        if new != confirm:
-            raise serializers.ValidationError({"confirm_new_password": "Las contraseñas no coinciden."})
-
-        # si es el/la mism@, debe enviar y validar la contraseña actual
-        is_self = request.user.pk == target_user.pk
-        is_admin = getattr(request.user, "is_superuser", False)
-
-        if is_self and not current:
-            raise serializers.ValidationError({"current_password": "Obligatoria para cambiar tu propia contraseña."})
-
-        if is_self and not target_user.check_password(current):
-            raise serializers.ValidationError({"current_password": "No coincide con tu contraseña actual."})
-
-        if target_user.check_password(new):
-            raise serializers.ValidationError({"new_password": "La nueva contraseña no puede ser igual a la actual."})
-
-        # si no es self, debe ser admin
-        if not is_self and not is_admin:
-            raise serializers.ValidationError({"non_field_errors": "No tienes permiso para cambiar esta contraseña."})
-
-        return attrs
     
-class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
-    def validate(self, attrs):
-        self.token = attrs['refresh']
-        return attrs
-    def save(self, **kwargs):
-        RefreshToken(self.token).blacklist()
-class MyTokenPairSerializer(TokenObtainPairSerializer):
-    def validate(self, attrs):#@
-        username=attrs.get(self.username_field) or attrs.get('username')
-        password=attrs.get('password')
-        User=get_user_model()
-        user=User.objects.filter(username=username).first()
-        print(user)
-        if not user:
-            raise AuthenticationFailed('el usuario no existe')
-        if not user.check_password(password):
-            raise AuthenticationFailed('ingrese su contrase;a correctemetn')
-        
-            
-        return super().validate(attrs)  
-class AuthPermissionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AuthPermission
-        fields = ['id', 'codename', 'name'] 
+
+  
+ 
               
-class GroupSerializer(serializers.ModelSerializer):
-    permissions = serializers.PrimaryKeyRelatedField(
-        queryset=AuthPermission.objects.all(),
-        many=True
-    )
-
-    class Meta:
-        model = Group
-        fields = ['id', 'name', 'permissions']
-class UsuarioMeSerializer(serializers.ModelSerializer):
-    """
-    Serializador exclusivo para el endpoint '/usuarios/me/'.
-    """
-    rol = RolSerializer(read_only=True) # Utiliza el RolSerializer para serializar el objeto completo
-
-    class Meta:
-        model = Usuario
-        fields = [
-            "id",
-            "username",
-            "nombre",
-            "apellido_paterno",
-            "apellido_materno",
-            "sexo",
-            "email",
-            "fecha_nacimiento",
-            "rol",
-        ]
 class PagoSerializer(serializers.ModelSerializer):
     # Campos de solo lectura para mostrar información relacionada
     usuario_nombre = serializers.SerializerMethodField()
@@ -651,3 +686,84 @@ class AsignacionTareaSerializer(serializers.ModelSerializer):
         # Si el estado_asignacion cambia a 'completada' y no se envía fecha_completado, el modelo lo establecerá.
         # Si se está desactivando o cancelando, la lógica del modelo se encarga de no establecer fecha_completado
         return super().update(instance, validated_data)
+
+
+
+ #
+
+
+# En serializers.py
+
+# ... tus otros serializadores (RolSerializer, UsuarioSerializer, etc.)
+
+class CustomUserForBitacoraSerializer(serializers.ModelSerializer):
+    rol = RolSerializer(read_only=True) # Para obtener el nombre del rol
+
+    class Meta:
+        model = Usuario
+        fields = ['id', 'username', 'nombre', 'apellido_paterno', 'apellido_materno', 'rol']
+
+class BitacoraSerializer(serializers.ModelSerializer):
+    usuario = CustomUserForBitacoraSerializer(read_only=True) # Anida el serializador de usuario
+
+    class Meta:
+        model = Bitacora
+        fields = '__all__'
+        # O podrías especificar los campos para mayor control:
+        # fields = ['id', 'login', 'logout', 'usuario', 'ip', 'device']
+
+# serializers.py
+from rest_framework import serializers
+from .models import DispositivoMovil, NotificacionPush, IncidenteSeguridadIA
+
+class DispositivoMovilSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DispositivoMovil
+        fields = [
+            'id', 'usuario', 'token_fcm', 'modelo_dispositivo',
+            'sistema_operativo', 'activo', 'fecha_registro', 'ultima_conexion'
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['usuario_username'] = instance.usuario.username if instance.usuario else None
+        rep['usuario_nombre_completo'] = f"{instance.usuario.nombre} {instance.usuario.apellido_paterno}" if instance.usuario else None
+        return rep
+
+
+class NotificacionPushSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificacionPush
+        fields = [
+            'id', 'usuario', 'dispositivo', 'titulo', 'cuerpo', 'tipo',
+            'estado', 'fecha_envio', 'fecha_entrega', 'fecha_lectura',
+            'datos_adicionales', 'intento_envio'
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['usuario_username'] = instance.usuario.username if instance.usuario else None
+        rep['usuario_nombre_completo'] = f"{instance.usuario.nombre} {instance.usuario.apellido_paterno}" if instance.usuario else None
+        rep['dispositivo_modelo'] = instance.dispositivo.modelo_dispositivo if instance.dispositivo else None
+        rep['tipo_display'] = instance.get_tipo_display()
+        rep['estado_display'] = instance.get_estado_display()
+        return rep
+
+
+class IncidenteSeguridadIASerializer(serializers.ModelSerializer):
+    class Meta:
+        model = IncidenteSeguridadIA
+        fields = [
+            'id', 'tipo', 'descripcion', 'fecha_hora', 'ubicacion',
+            'imagen_evidencia', 'notificacion_enviada', 'resuelto',
+            'resuelto_por', 'fecha_resolucion'
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['tipo_display'] = instance.get_tipo_display()
+        rep['resuelto_por_username'] = instance.resuelto_por.username if instance.resuelto_por else None
+        rep['resuelto_por_nombre'] = f"{instance.resuelto_por.nombre} {instance.resuelto_por.apellido_paterno}" if instance.resuelto_por else None
+        rep['notificacion_id'] = instance.notificacion_enviada.id if instance.notificacion_enviada else None
+        rep['notificacion_titulo'] = instance.notificacion_enviada.titulo if instance.notificacion_enviada else None
+        return rep

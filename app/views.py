@@ -46,13 +46,25 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 from rest_framework import viewsets
 from .models import (
     Rol, Usuario, Telefono ,
-    Bitacora,Comunicado,Residente,Propiedad,ContratoArrendamiento
+    Bitacora,Comunicado,Residente,Propiedad,ContratoArrendamiento,Mascota, Bitacora, DetalleBitacora,
+    Casa, AreaComun, Reserva , TareaMantenimiento,
+    Vehiculo, Residente,
+
+    DispositivoMovil, NotificacionPush, IncidenteSeguridadIA
 )
 from  .mixin import BitacoraLoggerMixin
 from .serializers import (ChangePasswordSerializer,
-    RolSerializer,UsuarioSerializer, TelefonoSerializer, 
-     LogoutSerializer,MyTokenPairSerializer,
-    UsuarioMeSerializer ,ComunicadoSerializer,GroupSerializer,ResidenteSerializer,ContratoArrendamientoSerializer
+    RolSerializer,UsuarioSerializer, TelefonoSerializer, UsuarioMeSerializer,
+    LogoutSerializer,MyTokenPairSerializer,ResidenteSerializer,
+
+
+DispositivoMovilSerializer, NotificacionPushSerializer, IncidenteSeguridadIASerializer,
+
+    MascotaSerializer, BitacoraSerializer, DetalleBitacoraSerializer,
+    CasaSerializer,GroupSerializer,
+    AreaComunSerializer, ReservaSerializer,PropiedadSerializer,ComunicadoSerializer,
+    ContratoArrendamientoSerializer,
+    TareaMantenimientoSerializer, VehiculoSerializer,AsignarCasaAVehiculoSerializer
 )
 class MyTokenObtainPairView(TokenObtainPairView): 
     serializer_class = MyTokenPairSerializer
@@ -108,9 +120,38 @@ class UsuarioViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     serializer_class = UsuarioSerializer
     filter_backends = [DjangoFilterBackend]  # 👈 AÑADE ESTO
     filterset_fields = ['rol__nombre']  # 👈
-    # Usar el permiso IsAuthenticated para requerir que el usuario esté autenticado
-    # permission_classes = [IsAuthenticated]
-    #permission_classes = [IsAdministrador,IsAuthenticated]
+    permission_classes = [IsAuthenticated] # Asegúrate de tener la seguridad adecuada
+
+    def get_queryset(self):
+        # Obtener el queryset base
+        queryset = super().get_queryset()
+
+        # Si el usuario autenticado es un Administrador
+        # y no está pidiendo el endpoint 'me' (que maneja su propio serializador)
+        # excluye al propio usuario de la lista.
+        # Es importante que el usuario autenticado no sea excluido cuando accede a '/me'
+        # o cuando un administrador necesita ver su propio perfil en otra parte.
+
+        if self.request.user.is_authenticated:
+            # Comprobamos si el usuario tiene un rol asignado y si ese rol es 'Administrador'
+            # Asumiendo que el campo 'rol' es un ForeignKey al modelo Rol y tiene un campo 'nombre'
+            is_admin = hasattr(self.request.user, 'rol') and \
+                       self.request.user.rol and \
+                       self.request.user.rol.nombre == 'Administrador'
+
+            # Además, podemos verificar si la acción actual NO es 'retrieve' o 'me'
+            # para evitar excluir al administrador de su propio detalle o del endpoint 'me'.
+            # La acción 'list' es donde generalmente querrías esta exclusión.
+            if is_admin and self.action == 'list':
+                queryset = queryset.exclude(id=self.request.user.id)
+            
+            # Si se está filtrando por rol, también aplicamos ese filtro
+            # filterset_fields ya maneja esto, pero si lo haces manualmente...
+            # rol_nombre_param = self.request.query_params.get('rol__nombre')
+            # if rol_nombre_param:
+            #     queryset = queryset.filter(rol__nombre=rol_nombre_param)
+
+        return queryset
    
     @action(
         detail=False,
@@ -129,28 +170,35 @@ class UsuarioViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         url_path='set-password',
-        permission_classes=[IsAuthenticated]  # cualquiera autenticado; la lógica de permisos la hace el serializer
+        # Aquí es donde aplicamos los permisos específicos para esta acción
+        permission_classes=[IsAuthenticated] # Todos los autenticados pueden intentar cambiar,
+                                             # pero el serializer y has_object_permission filtrarán.
     )
     def set_password(self, request, pk=None):
-        print("📥 Payload recibido en backend:", request.data)
-        """
-        Cambia la contraseña del usuario objetivo.
-        Reglas:
-          - Si cambias TU propia contraseña: debes enviar current_password correcto.
-          - Si cambias la de OTRO: debes ser superuser (is_superuser).
-          - new_password != current_password y min 6 caracteres (lo valida el serializer).
-        Payload esperado:
-        {
-          "current_password": "opcional si admin, obligatorio si self",
-          "new_password": "*****",
-          "confirm_new_password": "*****"
-        }
-        """
-        target_user = self.get_object()
-        
+        print("📥 Payload recibido en backend (set_password):", request.data)
+
+        target_user = get_object_or_404(Usuario, pk=pk) # Obtener el usuario objetivo
+
+        # --- Lógica de Permisos de Vista ---
+        # 1. Si el usuario autenticado es un administrador o superusuario:
+        #    Puede cambiar la contraseña de CUALQUIER usuario.
+        is_request_user_admin = (request.user.is_superuser or
+                                 (hasattr(request.user, 'rol') and request.user.rol and request.user.rol.nombre == 'Administrador'))
+
+        if not is_request_user_admin: # Si el usuario no es admin/superuser
+            # 2. Solo puede cambiar SU PROPIA contraseña.
+            if target_user.id != request.user.id:
+                return Response(
+                    {"detail": "No tienes permiso para cambiar la contraseña de otro usuario."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        # Fin de la lógica de permisos de vista. Si llega aquí, el usuario tiene derecho
+        # a intentar cambiar la contraseña de `target_user`.
+
+        # Se pasa el request y el target_user al serializer para la validación detallada
         ser = ChangePasswordSerializer(
             data=request.data,
-            context={"request": request, "user": target_user}
+            context={"request": request, "user": target_user} # Pasar el usuario objetivo al serializer
         )
         ser.is_valid(raise_exception=True)
 
@@ -161,7 +209,8 @@ class UsuarioViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
 
         # (Opcional) registrar en bitácora esta acción específica
         try:
-            self._log(request, "CAMBIAR_PASSWORD", self._tabla())
+            # Reemplaza self._log y self._tabla() con tu implementación si la tienes
+            pass # self._log(request, "CAMBIAR_PASSWORD", self._tabla())
         except Exception:
             pass
 
@@ -294,20 +343,6 @@ class GroupViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     queryset = Group.objects.all()
     serializer_class = GroupSerializer
 
-# Importa los modelos y serializadores necesarios
-from .models import (
-    Mascota, Bitacora, DetalleBitacora,
-    Casa, AreaComun, Reserva , TareaMantenimiento,
-    Vehiculo, Residente
-)
-from .serializers import (
-    MascotaSerializer, BitacoraSerializer, DetalleBitacoraSerializer,
-    CasaSerializer,
-    AreaComunSerializer, ReservaSerializer,PropiedadSerializer,
-    TareaMantenimientoSerializer, VehiculoSerializer,AsignarCasaAVehiculoSerializer
-)
-from rest_framework import viewsets
-
 
 
 
@@ -403,11 +438,9 @@ class TareaMantenimientoViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     queryset = TareaMantenimiento.objects.all()
     serializer_class = TareaMantenimientoSerializer
     # permission_classes = [IsAuthenticated]
-class BitacoraViewSet(BitacoraLoggerMixin,viewsets.ReadOnlyModelViewSet):
-    queryset = Bitacora.objects.all()
+class BitacoraViewSet(viewsets.ModelViewSet):
+    queryset = Bitacora.objects.all().select_related('usuario', 'usuario__rol') # IMPORTANTE: Optimizar consulta
     serializer_class = BitacoraSerializer
-    # Usar ReadOnlyModelViewSet porque los registros no deberían ser creados, actualizados o eliminados directamente a través de la API
-    # permission_classes = [IsAdministrador]
 
 class DetalleBitacoraViewSet(BitacoraLoggerMixin,viewsets.ReadOnlyModelViewSet):
     queryset = DetalleBitacora.objects.all()
@@ -773,7 +806,7 @@ def stripe_webhook(request):
     # aún así respondemos 200 para que Stripe sepa que lo recibimos.
     return HttpResponse(status=200)
 
-class PropiedadesDelPropietarioView(generics.ListAPIView):
+class PropiedadesDelPropietarioView(BitacoraLoggerMixin,generics.ListAPIView):
     serializer_class = PropiedadSerializer
     permission_classes = [IsAuthenticated]
 
@@ -911,3 +944,29 @@ class AsignacionTareaViewSet(BitacoraLoggerMixin, viewsets.ModelViewSet):
             instance.delete()
         else:
             raise PermissionDenied("Solo los administradores pueden eliminar asignaciones de tareas.")
+        
+class DispositivoMovilViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
+    queryset = DispositivoMovil.objects.all()
+    serializer_class = DispositivoMovilSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['activo', 'usuario']
+    search_fields = ['modelo_dispositivo', 'sistema_operativo', 'token_fcm']
+    ordering_fields = ['fecha_registro', 'ultima_conexion']
+
+
+class NotificacionPushViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
+    queryset = NotificacionPush.objects.all()
+    serializer_class = NotificacionPushSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['estado', 'tipo', 'usuario']
+    search_fields = ['titulo', 'cuerpo']
+    ordering_fields = ['fecha_envio', 'fecha_lectura']
+
+
+class IncidenteSeguridadIAViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
+    queryset = IncidenteSeguridadIA.objects.all()
+    serializer_class = IncidenteSeguridadIASerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['tipo', 'resuelto', 'resuelto_por']
+    search_fields = ['descripcion', 'ubicacion']
+    ordering_fields = ['fecha_hora', 'fecha_resolucion']

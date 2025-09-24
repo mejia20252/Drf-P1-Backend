@@ -28,6 +28,8 @@ class Telefono(models.Model):
     def __str__(self): return self.numero
 
 
+
+
 class Casa(models.Model):
     estado_ocupacion_choices = [('ocupada', 'Ocupada'), ('desocupada', 'Desocupada'), ('en_mantenimiento', 'En Mantenimiento'), ('suspendida', 'Suspendida')]
     numero_casa = models.CharField(max_length=10, unique=True)
@@ -361,3 +363,130 @@ class AsignacionTarea(models.Model):
 
         super().save(*args, **kwargs)
 
+
+
+
+#push notification
+class DispositivoMovil(models.Model):
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        related_name='dispositivos',
+        help_text="Usuario propietario del dispositivo"
+    )
+    token_fcm = models.TextField(
+        unique=True,
+        help_text="Token de Firebase Cloud Messaging para enviar notificaciones push"
+    )
+    modelo_dispositivo = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Ej: iPhone 14, Samsung Galaxy S23"
+    )
+    sistema_operativo = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="iOS, Android, etc."
+    )
+    activo = models.BooleanField(
+        default=True,
+        help_text="Indica si el dispositivo sigue recibiendo notificaciones"
+    )
+    fecha_registro = models.DateTimeField(auto_now_add=True)
+    ultima_conexion = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Última vez que la app se conectó o renovó el token"
+    )
+
+    class Meta:
+        verbose_name = "Dispositivo Móvil"
+        verbose_name_plural = "Dispositivos Móviles"
+        ordering = ['-fecha_registro']
+
+    def __str__(self):
+        return f"{self.usuario.username} - {self.modelo_dispositivo or 'Dispositivo'}"
+class NotificacionPush(models.Model):
+    TIPO_NOTIFICACION_CHOICES = [
+        ('seguridad', 'Seguridad'),
+        ('finanzas', 'Finanzas'),
+        ('areas_comunes', 'Áreas Comunes'),
+        ('mantenimiento', 'Mantenimiento'),
+        ('comunicado', 'Comunicado'),
+        ('sistema', 'Sistema'),
+    ]
+
+    ESTADO_CHOICES = [
+        ('enviada', 'Enviada'),
+        ('entregada', 'Entregada'),
+        ('leida', 'Leída'),
+        ('fallida', 'Fallida'),
+    ]
+
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        related_name='notificaciones_push',
+        help_text="Usuario destinatario de la notificación"
+    )
+    dispositivo = models.ForeignKey(
+        DispositivoMovil,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notificaciones_enviadas',
+        help_text="Dispositivo al que se envió la notificación"
+    )
+    titulo = models.CharField(max_length=150)
+    cuerpo = models.TextField()
+    tipo = models.CharField(max_length=50, choices=TIPO_NOTIFICACION_CHOICES, default='sistema')
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='enviada')
+    fecha_envio = models.DateTimeField(auto_now_add=True)
+    fecha_entrega = models.DateTimeField(null=True, blank=True, help_text="Cuando FCM confirma entrega")
+    fecha_lectura = models.DateTimeField(null=True, blank=True)
+    datos_adicionales = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Payload adicional (ej: id de incidente, url, acción)"
+    )
+    intento_envio = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        verbose_name = "Notificación Push"
+        verbose_name_plural = "Notificaciones Push"
+        ordering = ['-fecha_envio']
+
+    def __str__(self):
+        return f"[{self.get_tipo_display()}] {self.titulo} → {self.usuario.username}"
+class IncidenteSeguridadIA(models.Model):
+    TIPO_INCIDENTE_CHOICES = [
+        ('acceso_no_autorizado', 'Acceso No Autorizado'),
+        ('persona_desconocida', 'Persona Desconocida en Área Restringida'),
+        ('vehiculo_mal_estacionado', 'Vehículo Mal Estacionado'),
+        ('perro_suelto', 'Perro Suelto'),
+        ('perro_haciendo_necesidades', 'Perro Haciendo Necesidades'),
+    ]
+
+    tipo = models.CharField(max_length=50, choices=TIPO_INCIDENTE_CHOICES)
+    descripcion = models.TextField()
+    fecha_hora = models.DateTimeField(auto_now_add=True)
+    ubicacion = models.CharField(max_length=255, help_text="Ej: Entrada principal, Torre A, Piscina")
+    imagen_evidencia = models.ImageField(upload_to='incidentes/', null=True, blank=True)
+    notificacion_enviada = models.ForeignKey(
+        NotificacionPush,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='incidentes_asociados'
+    )
+    resuelto = models.BooleanField(default=False)
+    resuelto_por = models.ForeignKey(
+        Usuario,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='incidentes_resueltos'
+    )
+    fecha_resolucion = models.DateTimeField(null=True, blank=True)
