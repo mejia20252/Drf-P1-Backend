@@ -54,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi8 \
     shared-mime-info \
     libharfbuzz0b \
-    libicu72 \
+    libicu74 \
     libgirepository-1.0-1 \
  # Ensure fonts are available for rendering
     fonts-dejavu \
