@@ -89,9 +89,20 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return rep
 
 class TelefonoSerializer(serializers.ModelSerializer):
+    # Campo para el username del usuario, solo lectura
+    usuario_username = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = Telefono
-        fields = '__all__'
+        fields = '__all__' # Incluye 'usuario' (el ID) y 'usuario_username'
+        read_only_fields = ('usuario_username',) # usuario_username no se usa para escritura
+
+    def get_usuario_username(self, obj):
+        """
+        Retorna el username del usuario asociado.
+        """
+        return obj.usuario.username if obj.usuario else None
+
 
 class MyTokenPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):#@
@@ -293,6 +304,36 @@ class AreaComunSerializer(serializers.ModelSerializer):
     class Meta:
         model = AreaComun
         fields = '__all__'
+    
+    def to_representation(self, instance):
+        """
+        Convert `Decimal` values to string when serializing for API.
+        This is useful to match frontend's expectation of string for costo_alquiler.
+        """
+        representation = super().to_representation(instance)
+        if representation.get('costo_alquiler') is not None:
+            representation['costo_alquiler'] = str(representation['costo_alquiler'])
+        return representation
+
+    def to_internal_value(self, data):
+        """
+        Convert `costo_alquiler` back to Decimal for the model if it's provided as a string.
+        Also handle setting costo_alquiler to 0 if es_de_pago is false.
+        """
+        # Call the parent's to_internal_value to get initial validated data
+        internal_value = super().to_internal_value(data)
+
+        # Handle costo_alquiler based on es_de_pago
+        es_de_pago = data.get('es_de_pago', False) # Get from request data first, default to False
+        
+        if not es_de_pago:
+            internal_value['costo_alquiler'] = 0.00 # Set to 0 if not de pago
+        elif 'costo_alquiler' in data and data['costo_alquiler'] == '0.00':
+             # If it is de pago but costo is "0.00", it means invalid input,
+             # Django's DecimalField will handle validation errors if 0.00 is not allowed.
+             pass # Let Django's validation handle if 0.00 is valid or not when es_de_pago is True
+
+        return internal_value
 
 class ReservaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -767,3 +808,29 @@ class IncidenteSeguridadIASerializer(serializers.ModelSerializer):
         rep['notificacion_id'] = instance.notificacion_enviada.id if instance.notificacion_enviada else None
         rep['notificacion_titulo'] = instance.notificacion_enviada.titulo if instance.notificacion_enviada else None
         return rep
+
+
+
+# serializers.py
+from rest_framework import serializers
+from .models import ReconocimientoPlaca, Vehiculo
+
+class ReconocimientoPlacaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReconocimientoPlaca
+        fields = [
+            'id',
+            'usuario_seguridad',
+            'imagen_placa',
+            'placa_detectada',
+            'vehiculo_coincidente',
+            'accion_tomada',
+            'estado',
+            'fecha_hora'
+        ]
+        read_only_fields = ['placa_detectada', 'vehiculo_coincidente', 'accion_tomada', 'estado', 'fecha_hora']
+
+    def validate_usuario_seguridad(self, value):
+        if value and value.rol and value.rol.nombre != 'Seguridad':
+            raise serializers.ValidationError("Solo usuarios con rol 'Seguridad' pueden realizar esta acción.")
+        return value

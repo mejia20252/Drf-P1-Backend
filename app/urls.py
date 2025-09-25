@@ -5,7 +5,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from django.conf.urls import handler404
 from .views import  (RolViewSet, UsuarioViewSet, TelefonoViewSet,
       MyTokenObtainPairView,LogoutView,GroupViewSet,AuthPermissionViewSet,
-         CasaViewSet, ResidenteViewSet,
+         CasaViewSet, ResidenteViewSet,ReconocimientoPlacaViewSet,
     AreaComunViewSet, ReservaViewSet, TareaMantenimientoViewSet,PerfilTrabajadorViewSet, AsignacionTareaViewSet,
     BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet,ComunicadoViewSet,ConceptoPagoViewSet,
     CuotaViewSet,PagoViewSet,PropiedadViewSet, PropiedadesDelPropietarioView,ContratoArrendamientoViewSet,
@@ -27,6 +27,7 @@ router.register(r'notificaciones', NotificacionPushViewSet, basename='notificaci
 router.register(r'incidentes', IncidenteSeguridadIAViewSet, basename='incidente')
 
 router.register(r'casas', CasaViewSet, basename='casa')
+router.register(r'placas', ReconocimientoPlacaViewSet, basename='placas')
 router.register(r'contratos-arrendamiento', ContratoArrendamientoViewSet, basename='contrato-arrendamiento')
 router.register(r'perfiles-trabajador', PerfilTrabajadorViewSet)
 router.register(r'asignaciones-tarea', AsignacionTareaViewSet)

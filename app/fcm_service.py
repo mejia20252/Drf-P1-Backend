@@ -6,9 +6,16 @@ from .models import DispositivoMovil, NotificacionPush
 
 # Inicializa Firebase (hazlo una sola vez, ej. en apps.py o settings)
 def initialize_firebase():
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
-        firebase_admin.initialize_app(cred)
+    if not firebase_admin._apps: # Check if Firebase is already initialized
+        if settings.FIREBASE_CREDENTIALS:
+            cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS) # <--- CHANGE MADE HERE
+            firebase_admin.initialize_app(cred)
+            print("Firebase Admin SDK initialized successfully.")
+        else:
+            print("Firebase credentials not found in settings. Firebase Admin SDK not initialized.")
+    else:
+        print("Firebase Admin SDK already initialized.")
+
 
 initialize_firebase()
 

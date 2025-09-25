@@ -45,7 +45,7 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 
 from rest_framework import viewsets
 from .models import (
-    Rol, Usuario, Telefono ,
+    Rol, Usuario, Telefono ,ReconocimientoPlaca,
     Bitacora,Comunicado,Residente,Propiedad,ContratoArrendamiento,Mascota, Bitacora, DetalleBitacora,
     Casa, AreaComun, Reserva , TareaMantenimiento,
     Vehiculo, Residente,
@@ -53,7 +53,7 @@ from .models import (
     DispositivoMovil, NotificacionPush, IncidenteSeguridadIA
 )
 from  .mixin import BitacoraLoggerMixin
-from .serializers import (ChangePasswordSerializer,
+from .serializers import (ChangePasswordSerializer,ReconocimientoPlacaSerializer,
     RolSerializer,UsuarioSerializer, TelefonoSerializer, UsuarioMeSerializer,
     LogoutSerializer,MyTokenPairSerializer,ResidenteSerializer,
 
@@ -690,7 +690,6 @@ class PagoViewSet(BitacoraLoggerMixin, viewsets.ModelViewSet):
 
 
 # views.py (dentro de tu archivo de vistas)
-
 @csrf_exempt
 def stripe_webhook(request):
     payload = request.body
@@ -748,8 +747,9 @@ def stripe_webhook(request):
                 if tipo_objeto == 'cuota' and existing_pago.content_object and existing_pago.content_object.estado != 'pagada':
                     existing_pago.content_object.estado = 'pagada'
                     existing_pago.content_object.save()
-                elif tipo_objeto == 'reserva' and existing_pago.content_object and existing_pago.content_object.estado != 'confirmada':
+                elif tipo_objeto == 'reserva' and existing_pago.content_object and (existing_pago.content_object.estado != 'confirmada' or not existing_pago.content_object.pagada):
                     existing_pago.content_object.estado = 'confirmada'
+                    existing_pago.content_object.pagada = True # Aseguramos que también se marque como pagada
                     existing_pago.content_object.save()
                 return HttpResponse(status=200) # Ya procesado
 
@@ -774,6 +774,7 @@ def stripe_webhook(request):
                 reserva = Reserva.objects.get(id=objeto_id)
                 pago.content_object = reserva
                 reserva.estado = 'confirmada' # ¡Actualizar el estado de la reserva!
+                reserva.pagada = True        # <--- ¡AQUÍ ESTÁ EL CAMBIO!
                 reserva.save() # ¡Guardar la reserva con el nuevo estado!
             else:
                 logger.warning(f"Tipo de objeto no soportado en webhook: {tipo_objeto} para session {session.id}")
@@ -805,6 +806,7 @@ def stripe_webhook(request):
     # Si el evento no es de checkout.session.completed, o si es un evento que no manejamos
     # aún así respondemos 200 para que Stripe sepa que lo recibimos.
     return HttpResponse(status=200)
+
 
 class PropiedadesDelPropietarioView(BitacoraLoggerMixin,generics.ListAPIView):
     serializer_class = PropiedadSerializer
@@ -970,3 +972,8 @@ class IncidenteSeguridadIAViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     filterset_fields = ['tipo', 'resuelto', 'resuelto_por']
     search_fields = ['descripcion', 'ubicacion']
     ordering_fields = ['fecha_hora', 'fecha_resolucion']
+
+class ReconocimientoPlacaViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
+    queryset = Reserva.objects.all()
+    serializer_class = ReconocimientoPlacaSerializer
+    # permission_classes = [IsAuthenticated]
