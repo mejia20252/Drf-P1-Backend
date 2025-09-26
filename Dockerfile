@@ -40,7 +40,7 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/venv/bin:$PATH" \
-    PORT=8000
+    PORT=8080 
 
 WORKDIR /app
 
@@ -75,7 +75,7 @@ COPY --chown=appuser:appuser . .
 COPY --chown=appuser:appuser ./entrypoint.sh /usr/src/app/
 RUN chmod +x /usr/src/app/entrypoint.sh
 
-EXPOSE 8000
+EXPOSE 8080 
 
 # Use the entrypoint script instead of the direct CMD
 ENTRYPOINT ["/usr/src/app/entrypoint.sh"]

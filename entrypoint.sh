@@ -10,4 +10,5 @@ python manage.py create_default_superuser
 python manage.py collectstatic --no-input
 
 # Start the Gunicorn server
-gunicorn drf_p1_backend.wsgi:application --bind 0.0.0.0:8000
+# ¡CAMBIO AQUÍ! Ahora enlaza con 0.0.0.0:8080
+gunicorn drf_p1_backend.wsgi:application --bind 0.0.0.0:8080
