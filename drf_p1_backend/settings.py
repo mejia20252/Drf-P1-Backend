@@ -10,27 +10,57 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 import os
+from google.oauth2 import service_account 
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
 import stripe 
 import base64
 import json
+import tempfile 
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# --- CREDENTIALS HANDLING FOR GOOGLE CLOUD STORAGE (GCS) ---
+_google_credentials_file_path = None
+GS_CREDENTIALS_BASE64 = config('GS_CREDENTIALS_BASE64', default=None)
+
+if GS_CREDENTIALS_BASE64:
+    try:
+        decoded_credentials = base64.b64decode(GS_CREDENTIALS_BASE64).decode('utf-8')
+        json.loads(decoded_credentials)
+        
+        temp_dir = Path(tempfile.gettempdir())
+        temp_credentials_file = temp_dir / "google_credentials_from_base64.json"
+        
+        with open(temp_credentials_file, "w") as f:
+            f.write(decoded_credentials)
+            
+        _google_credentials_file_path = str(temp_credentials_file)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _google_credentials_file_path
+        print(f"[DEBUG] GCS credentials loaded from Base64 and saved temporarily to: {_google_credentials_file_path}")
+        
+    except Exception as e:
+        print(f"[ERROR] Could not process Base64 GCS credentials: {e}")
+else:
+    print("[INFO] 'GS_CREDENTIALS_BASE64' is not defined. GCS credentials not configured.")
+
+
+# --- STRIPE CONFIGURATION ---
 STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY')
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET')
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
-# En settings.py, temporalmente:
+
+# En settings.py, temporalmente para depuración:
 print(f"STRIPE_PUBLISHABLE_KEY: {STRIPE_PUBLISHABLE_KEY}")
 print(f"STRIPE_SECRET_KEY: {STRIPE_SECRET_KEY}")
 print(f"FRONTEND_URL: {FRONTEND_URL}")
 print(f"STRIPE_WEBHOOK_SECRET: {STRIPE_WEBHOOK_SECRET}")
 stripe.api_key = STRIPE_SECRET_KEY
-#FIREBASE_CREDENTIALS_PATH=r"C:\Users\Usuario\Documents\si2_projects\P1\DRF-P1-Backend\si2-p1-firebase-adminsdk-fbsvc-33c74a4bb7.json"
-# Firebase Credentials
+
+# --- FIREBASE CREDENTIALS ---
 FIREBASE_CREDENTIALS_BASE64 = config('FIREBASE_CREDENTIALS_BASE64', default='')
 
 if FIREBASE_CREDENTIALS_BASE64:
@@ -40,10 +70,11 @@ if FIREBASE_CREDENTIALS_BASE64:
         print("Firebase credentials loaded successfully from Base64.")
     except Exception as e:
         print(f"Error decoding or parsing Firebase credentials from Base64: {e}")
-        FIREBASE_CREDENTIALS = None # Or raise an error, depending on your needs
+        FIREBASE_CREDENTIALS = None 
 else:
     print("FIREBASE_CREDENTIALS_BASE64 not found in .env. Firebase will not be initialized.")
     FIREBASE_CREDENTIALS = None
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -53,9 +84,9 @@ SECRET_KEY = 'django-insecure-atx29evqx8tn7s(cvaa#=%kv2o8m#0v7g3@)@s4yf4&&xp+$6m
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["*"]  # pro listar los dominios específicos por seguridad. 
-auth_user_model = 'app.Usuario'  #nameapp.User
-AUTH_USER_MODEL = 'app.Usuario'  #nameapp.User
+ALLOWED_HOSTS = ["*"]  # TODO: listar los dominios específicos por seguridad en producción. 
+auth_user_model = 'app.Usuario'  
+AUTH_USER_MODEL = 'app.Usuario'  
 
 
 # Application definition
@@ -70,16 +101,19 @@ INSTALLED_APPS = [
      # Your app 
     'app',
 
-    # Django REST Framework # 0F
-    'rest_framework','corsheaders','rest_framework_simplejwt','rest_framework_simplejwt.token_blacklist','django_filters',
-    
+    # Django REST Framework 
+    'rest_framework',
+    'corsheaders',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'django_filters',
+    'storages', # Añadir django-storages para Google Cloud Storage
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # 0FDebe ir lo más arriba posible!
-    'django.middleware.common.CommonMiddleware',#0F ¡Debe ir lo más arriba posible!
-    'whitenoise.middleware.WhiteNoiseMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Debe ir lo más arriba posible!
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware', # Para servir estáticos en producción
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -160,14 +194,32 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Configuración de STORAGES para Google Cloud Storage
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            "bucket_name": config("GS_BUCKET_NAME"),
+            "project_id": config("GS_PROJECT_ID"),
+            "credentials": service_account.Credentials.from_service_account_file(
+                _google_credentials_file_path
+            ) if _google_credentials_file_path else None,
+        },
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-#0F BEGIN
+
+# --- JWT (JSON Web Token) Configuration ---
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(weeks=5),   # 5–15 min
-     'REFRESH_TOKEN_LIFETIME': timedelta(weeks=7),     # 1–7 días
+    'ACCESS_TOKEN_LIFETIME': timedelta(weeks=5),   # Ejemplo: 5 semanas (considera si es apropiado para tu caso)
+    'REFRESH_TOKEN_LIFETIME': timedelta(weeks=7),     # Ejemplo: 7 semanas (considera si es apropiado para tu caso)
 
     # Si se rota el refresh token, generar uno nuevo y descartar el anterior
     'ROTATE_REFRESH_TOKENS': True,
@@ -180,24 +232,26 @@ SIMPLE_JWT = {
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
+# --- Django REST Framework Configuration ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.IsAuthenticated', # Por defecto, requiere autenticación
     ),
     'DEFAULT_FILTER_BACKENDS': (
-        'django_filters.rest_framework.DjangoFilterBackend',  # Añadir esta línea
+        'django_filters.rest_framework.DjangoFilterBackend',  # Habilitar filtrado
     ),
-     "EXCEPTION_HANDLER": "app.exceptions.custom_exception_handler"
-    
-
+    "EXCEPTION_HANDLER": "app.exceptions.custom_exception_handler" # Manejador de excepciones personalizado
 }
-CORS_ALLOW_CREDENTIALS=True
-CORS_ALLOWED_ORIGINS=["http://localhost:5173", "http://localhost:4200"]
 
-#0F END
+# --- CORS (Cross-Origin Resource Sharing) Configuration ---
+CORS_ALLOW_CREDENTIALS=True
+# Define los orígenes permitidos para las solicitudes CORS
+CORS_ALLOWED_ORIGINS=["http://localhost:5173", "http://localhost:4200"] # Añade tus frontends aquí
+
+# --- LOGGING Configuration ---
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -212,5 +266,10 @@ LOGGING = {
         'app': { 'handlers': ['console'], 'level': 'INFO', 'propagate': False },
         # o más granular:
         'app.views': { 'handlers': ['console'], 'level': 'INFO', 'propagate': False },
+        'storages': { # Para ver logs de django-storages
+            'handlers': ['console'],
+            'level': 'INFO', 
+            'propagate': False,
+        },
     }
 }
