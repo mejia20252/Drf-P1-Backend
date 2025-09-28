@@ -253,7 +253,7 @@ REST_FRAMEWORK = {
 # --- CORS (Cross-Origin Resource Sharing) Configuration ---
 CORS_ALLOW_CREDENTIALS=True
 # Define los orígenes permitidos para las solicitudes CORS
-CORS_ALLOWED_ORIGINS=["http://localhost:5173", "http://localhost:4200"] # Añade tus frontends aquí
+#CORS_ALLOWED_ORIGINS=["http://localhost:5173", "http://localhost:4200","https://react-p1-frontend.onrender.com"] # Añade tus frontends aquí
 
 # --- LOGGING Configuration ---
 LOGGING = {
