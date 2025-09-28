@@ -48,6 +48,14 @@ else:
     print("[INFO] 'GS_CREDENTIALS_BASE64' is not defined. GCS credentials not configured.")
 
 # ---end google ---
+#incioconiguracion de crod
+
+_frontend_urls = config('FRONTEND_URLS', default='https://react-p1-frontend.onrender.com')
+CORS_ALLOWED_ORIGINS = [u.strip() for u in _frontend_urls.split(',') if u.strip()]
+
+#finde congiguraio de crod
+
+
 
 
 # --- STRIPE CONFIGURATION ---
