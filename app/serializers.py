@@ -11,7 +11,7 @@ from django.utils import timezone
 from .models import (
     Rol, Usuario, Telefono,  Casa, ContratoArrendamiento,
     Bitacora, DetalleBitacora, Residente, Mascota, AreaComun, Reserva,
-     TareaMantenimiento, Vehiculo, Comunicado, ConceptoPago,
+     TareaMantenimiento, Vehiculo, Comunicado, ConceptoPago,RegistroAccesoVehicular,
     Cuota, Propiedad,Pago
 )
 from django.contrib.auth.models import Group, Permission as AuthPermission
@@ -375,9 +375,15 @@ class ConceptoPagoSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class CuotaSerializer(serializers.ModelSerializer):
+    concepto_nombre = serializers.CharField(source='concepto.nombre', read_only=True)
+    casa_numero_casa = serializers.CharField(source='casa.numero_casa', read_only=True)
+
     class Meta:
         model = Cuota
         fields = '__all__'
+        # O si quieres ser explícito, puedes listar todos los campos:
+        # fields = ['id', 'concepto', 'casa', 'monto', 'periodo', 'fecha_vencimiento', 
+        #           'estado', 'generada_automaticamente', 'concepto_nombre', 'casa_numero_casa']
 
 # serializers.py
 
@@ -809,28 +815,32 @@ class IncidenteSeguridadIASerializer(serializers.ModelSerializer):
         rep['notificacion_titulo'] = instance.notificacion_enviada.titulo if instance.notificacion_enviada else None
         return rep
 
+class RegistroAccesoVehicularSerializer(serializers.ModelSerializer):
+    # Añadir un campo para la placa del vehículo asociado
+    vehiculo_autorizado_placa = serializers.SerializerMethodField()
+    registrado_por_username = serializers.SerializerMethodField() # Si también lo obtienes así
 
-
-# serializers.py
-from rest_framework import serializers
-from .models import ReconocimientoPlaca, Vehiculo
-
-class ReconocimientoPlacaSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ReconocimientoPlaca
+        model = RegistroAccesoVehicular
         fields = [
             'id',
-            'usuario_seguridad',
-            'imagen_placa',
             'placa_detectada',
-            'vehiculo_coincidente',
-            'accion_tomada',
-            'estado',
-            'fecha_hora'
+            'acceso_exitoso',
+            'fecha_hora_intento',
+            'observaciones',
+            'vehiculo_asociado', # Mantener el ID si es útil para otras cosas
+            'vehiculo_autorizado_placa', # Nuevo campo
+            'registrado_por_username', # Si es un campo custom
         ]
-        read_only_fields = ['placa_detectada', 'vehiculo_coincidente', 'accion_tomada', 'estado', 'fecha_hora']
+        read_only_fields = ['fecha_hora_intento', 'registrado_por_username'] # Si se generan automáticamente
 
-    def validate_usuario_seguridad(self, value):
-        if value and value.rol and value.rol.nombre != 'Seguridad':
-            raise serializers.ValidationError("Solo usuarios con rol 'Seguridad' pueden realizar esta acción.")
-        return value
+    def get_vehiculo_autorizado_placa(self, obj):
+        if obj.vehiculo_asociado:
+            return obj.vehiculo_asociado.placa # Retorna la placa del vehículo
+        return None # O una cadena vacía, según prefieras
+
+    def get_registrado_por_username(self, obj):
+        # Asumiendo que `request.user` está disponible en el contexto del serializer si el registro es hecho por un usuario
+        # Si el usuario se guarda en el modelo RegistroAccesoVehicular, ajusta esto.
+        # Por ahora, un placeholder ya que no se ve en tu modelo RegistroAccesoVehicular.
+        return "Sistema" # o el nombre de usuario si lo tienes

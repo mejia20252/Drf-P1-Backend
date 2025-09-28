@@ -21,7 +21,7 @@ import tempfile
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+'''
 # --- CREDENTIALS HANDLING FOR GOOGLE CLOUD STORAGE (GCS) ---
 _google_credentials_file_path = None
 GS_CREDENTIALS_BASE64 = config('GS_CREDENTIALS_BASE64', default=None)
@@ -46,7 +46,7 @@ if GS_CREDENTIALS_BASE64:
 else:
     print("[INFO] 'GS_CREDENTIALS_BASE64' is not defined. GCS credentials not configured.")
 
-
+'''
 # --- STRIPE CONFIGURATION ---
 STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY')
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY')
@@ -195,6 +195,7 @@ STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Configuración de STORAGES para Google Cloud Storage
+''''
 STORAGES = {
     "default": {
         "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
@@ -210,6 +211,7 @@ STORAGES = {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+'''
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

@@ -1,10 +1,11 @@
+from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import api_view
 from rest_framework import generics
 from django.shortcuts import get_object_or_404
 from django.db import models 
 from django.shortcuts import render
-from rest_framework.decorators import action
+from rest_framework.decorators import action,permission_classes
 from .permissions import IsAdministrador, IsPropietario
 from .serializers import CasaSerializer
 from rest_framework.parsers import JSONParser
@@ -45,7 +46,7 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 
 from rest_framework import viewsets
 from .models import (
-    Rol, Usuario, Telefono ,ReconocimientoPlaca,
+    Rol, Usuario, Telefono ,RegistroAccesoVehicular,
     Bitacora,Comunicado,Residente,Propiedad,ContratoArrendamiento,Mascota, Bitacora, DetalleBitacora,
     Casa, AreaComun, Reserva , TareaMantenimiento,
     Vehiculo, Residente,
@@ -53,9 +54,9 @@ from .models import (
     DispositivoMovil, NotificacionPush, IncidenteSeguridadIA
 )
 from  .mixin import BitacoraLoggerMixin
-from .serializers import (ChangePasswordSerializer,ReconocimientoPlacaSerializer,
+from .serializers import (ChangePasswordSerializer,
     RolSerializer,UsuarioSerializer, TelefonoSerializer, UsuarioMeSerializer,
-    LogoutSerializer,MyTokenPairSerializer,ResidenteSerializer,
+    LogoutSerializer,MyTokenPairSerializer,ResidenteSerializer,RegistroAccesoVehicularSerializer,
 
 
 DispositivoMovilSerializer, NotificacionPushSerializer, IncidenteSeguridadIASerializer,
@@ -626,7 +627,6 @@ class PagoViewSet(BitacoraLoggerMixin, viewsets.ModelViewSet):
     serializer_class = PagoSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
     def crear_sesion_stripe(self, request):
         """
@@ -686,7 +686,70 @@ class PagoViewSet(BitacoraLoggerMixin, viewsets.ModelViewSet):
             return Response({"error": "Objeto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-# views.py (añade esta vista)
+    def get_queryset(self):
+        """
+        Este método es clave para filtrar los pagos según el rol del usuario.
+        - Los administradores ven todos los pagos.
+        - Otros usuarios (Propietario, Inquilino, Trabajador, Seguridad) solo ven sus propios pagos.
+        """
+        user = self.request.user
+
+        # Si el usuario no está autenticado, devuelve un queryset vacío (aunque IsAuthenticated ya lo manejaría)
+        if not user.is_authenticated:
+            return Pago.objects.none()
+
+        # Comprueba si el usuario tiene un rol y si es 'Administrador'
+        # Asumiendo que el campo 'rol' es un ForeignKey al modelo Rol y tiene un campo 'nombre'
+        is_admin = hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Administrador'
+
+        if is_admin:
+            # Los administradores ven todos los pagos
+            return super().get_queryset()
+        else:
+            # Otros usuarios solo ven los pagos que ellos mismos realizaron
+            # El campo 'usuario' en el modelo Pago se relaciona con el Usuario que hizo el pago.
+            return super().get_queryset().filter(usuario=user)
+
+    # Puedes añadir lógica adicional para `perform_create`, `perform_update`, `perform_destroy`
+    # si necesitas más control sobre quién puede crear, modificar o eliminar pagos.
+    # Por ejemplo, quizás solo los administradores puedan crear pagos manualmente,
+    # mientras que los pagos de cuotas se crean automáticamente por el sistema.
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        # Si no es un administrador, asegúrate de que el pago se asocie al usuario que lo crea
+        if not (hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Administrador'):
+            serializer.save(usuario=user)
+        else:
+            # Los administradores pueden crear pagos y asociarlos a cualquier usuario
+            serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        instance = serializer.instance
+        # Los administradores pueden actualizar cualquier pago
+        if hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Administrador':
+            serializer.save()
+        else:
+            # Los usuarios solo pueden actualizar sus propios pagos
+            if instance.usuario == user:
+                serializer.save()
+            else:
+                raise PermissionDenied("No tienes permiso para actualizar pagos de otros usuarios.")
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        # Los administradores pueden eliminar cualquier pago
+        if hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Administrador':
+            instance.delete()
+        else:
+            # Los usuarios solo pueden eliminar sus propios pagos
+            if instance.usuario == user:
+                instance.delete()
+            else:
+                raise PermissionDenied("No tienes permiso para eliminar pagos de otros usuarios.")
+            
+    
 
 
 # views.py (dentro de tu archivo de vistas)
@@ -803,8 +866,78 @@ def stripe_webhook(request):
                 pago.delete()
             return HttpResponse(status=500)
 
-    # Si el evento no es de checkout.session.completed, o si es un evento que no manejamos
-    # aún así respondemos 200 para que Stripe sepa que lo recibimos.
+    elif event['type'] == 'payment_intent.succeeded':
+        payment_intent = event['data']['object']
+        logger.info(f"PaymentIntent succeeded: {payment_intent['id']}")
+
+    # Aquí debes identificar qué pago se completó.
+    # Pero... ¿cómo sabes a qué usuario o reserva pertenece?
+    # ¡Necesitas haber guardado metadata en el PaymentIntent!
+
+    # Recomendación: al crear el PaymentIntent en tu endpoint `/create-payment-intent/`,
+    # incluye metadata con `usuario_id`, `tipo_objeto`, `objeto_id`, etc.
+
+        metadata = payment_intent.get('metadata', {})
+        usuario_id = metadata.get('usuario_id')
+        tipo_objeto = metadata.get('tipo_objeto')
+        objeto_id = metadata.get('objeto_id')
+
+        if not all([usuario_id, tipo_objeto, objeto_id]):
+            logger.warning("Metadata faltante en PaymentIntent %s", payment_intent['id'])
+            return HttpResponse(status=400)
+
+        try:
+            usuario = Usuario.objects.get(id=usuario_id)
+            monto = payment_intent['amount'] / 100  # de centavos a moneda
+            stripe_payment_id = payment_intent['id']
+
+        # Evitar duplicados
+            existing_pago = Pago.objects.filter(referencia=stripe_payment_id, usuario=usuario).first()
+            if existing_pago:
+                logger.info(f"Pago duplicado detectado: {stripe_payment_id}")
+                return HttpResponse(status=200)
+
+        # Crear el pago
+            pago = Pago.objects.create(
+            usuario=usuario,
+            tipo_pago=tipo_objeto,
+            monto=monto,
+            metodo_pago='tarjeta',
+            referencia=stripe_payment_id,
+            fecha_pago=timezone.now(),
+            )
+
+        # Asociar y actualizar estado
+            if tipo_objeto == 'cuota':
+                cuota = Cuota.objects.get(id=objeto_id)
+                pago.content_object = cuota
+                cuota.estado = 'pagada'
+                cuota.save()
+            elif tipo_objeto == 'reserva':
+                reserva = Reserva.objects.get(id=objeto_id)
+                pago.content_object = reserva
+                reserva.estado = 'confirmada'
+                reserva.pagada = True
+                reserva.save()
+            else:
+                pago.delete()
+                return HttpResponse(status=400)
+
+            pago.save()
+            logger.info(f"Pago registrado desde PaymentIntent: {pago.id}")
+
+        except Exception as e:
+            logger.error(f"Error procesando payment_intent.succeeded: {e}", exc_info=True)
+            if 'pago' in locals() and pago.pk:
+                pago.delete()
+            return HttpResponse(status=500)
+
+    elif event['type'] == 'payment_intent.payment_failed':
+        payment_intent = event['data']['object']
+        logger.warning(f"PaymentIntent fallido: {payment_intent['id']}")
+    # Opcional: notificar al usuario, registrar intento fallido, etc.
+
+# Al final, siempre responde 200
     return HttpResponse(status=200)
 
 
@@ -973,7 +1106,89 @@ class IncidenteSeguridadIAViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     search_fields = ['descripcion', 'ubicacion']
     ordering_fields = ['fecha_hora', 'fecha_resolucion']
 
-class ReconocimientoPlacaViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
-    queryset = Reserva.objects.all()
-    serializer_class = ReconocimientoPlacaSerializer
+
     # permission_classes = [IsAuthenticated]
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated]) 
+def create_payment_intent(request):
+    try:
+        amount = request.data.get('amount')
+        tipo_objeto = request.data.get('tipo_objeto')  # 'cuota' o 'reserva'
+        objeto_id = request.data.get('objeto_id')
+
+        if not all([amount, tipo_objeto, objeto_id]):
+            return Response({'error': 'Faltan parámetros'}, status=400)
+
+        # Crea un cliente (puedes reutilizar uno si ya existe)
+        customer = stripe.Customer.create(
+            email=request.user.email,
+            name=request.user.get_full_name() or request.user.username,
+        )
+
+        ephemeralKey = stripe.EphemeralKey.create(
+            customer=customer['id'],
+            stripe_version='2024-06-20'
+        )
+
+        payment_intent = stripe.PaymentIntent.create(
+            amount=int(amount),
+            currency='usd',
+            customer=customer['id'],
+            automatic_payment_methods={'enabled': True},
+            metadata={
+                'usuario_id': str(request.user.id),
+                'tipo_objeto': tipo_objeto,
+                'objeto_id': str(objeto_id),
+            }
+        )
+
+        return Response({
+            'paymentIntent': payment_intent['client_secret'],
+            'ephemeralKey': ephemeralKey['secret'],
+            'customer': customer['id'],
+        })
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=400)
+class VerificarPlacaView(APIView):
+    def post(self, request, *args, **kwargs):
+        placa_detectada = request.data.get('placa')
+        # La imagen_base64 ya no se procesará aquí, aunque podría seguirse recibiendo si la quieres ignorar o usar en otro lugar.
+        # imagen_base64 = request.data.get('imagen') 
+
+        if not placa_detectada:
+            return Response({"error": "Placa no proporcionada"}, status=status.HTTP_400_BAD_REQUEST)
+
+        vehiculo = None
+        acceso_exitoso = False
+        observaciones = ""
+
+        try:
+            vehiculo = Vehiculo.objects.get(placa__iexact=placa_detectada) # Búsqueda insensible a mayúsculas/minúsculas
+            acceso_exitoso = True
+            observaciones = "Placa reconocida. Acceso permitido."
+            print(f"Placa {placa_detectada} reconocida. Acceso exitoso.")
+        except Vehiculo.DoesNotExist:
+            observaciones = "Placa no reconocida. Acceso denegado."
+            print(f"Placa {placa_detectada} no reconocida. Acceso fallido.")
+        except Exception as e:
+            observaciones = f"Error al verificar placa: {str(e)}"
+            print(f"Error al verificar placa {placa_detectada}: {str(e)}")
+
+        # Crear el registro de acceso vehicular
+        registro_data = {
+            'placa_detectada': placa_detectada,
+            'acceso_exitoso': acceso_exitoso,
+            'vehiculo_asociado': vehiculo.id if vehiculo else None,
+            'observaciones': observaciones,
+        }
+        
+        registro = RegistroAccesoVehicular(**registro_data)
+
+
+        registro.save() # Guarda el registro, que ahora no incluye la imagen
+
+        serializer = RegistroAccesoVehicularSerializer(registro)
+        return Response({"acceso_permitido": acceso_exitoso, "mensaje": observaciones, "registro": serializer.data}, status=status.HTTP_200_OK)

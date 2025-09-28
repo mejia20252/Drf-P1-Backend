@@ -193,6 +193,7 @@ class Cuota(models.Model):
     generada_automaticamente = models.BooleanField(default=True)
     class Meta: unique_together = ('casa', 'periodo', 'concepto')
     def __str__(self): return f"{self.concepto.nombre} - Casa {self.casa.numero_casa} - {self.periodo.strftime('%Y-%m')}"
+    
 class Propiedad(models.Model):
     casa = models.OneToOneField(
         Casa,
@@ -494,56 +495,24 @@ class IncidenteSeguridadIA(models.Model):
     fecha_resolucion = models.DateTimeField(null=True, blank=True)
 
 
-class ReconocimientoPlaca(models.Model):
-    ESTADO_CHOICES = [
-        ('procesando', 'Procesando'),
-        ('placa_detectada', 'Placa Detectada'),
-        ('sin_placa', 'No se detectó placa'),
-        ('error_ia', 'Error en servicio de IA'),
-        ('verificada', 'Verificada en sistema'),
-    ]
-
-    ACCION_CHOICES = [
-        ('puerta_abierta', 'Puerta Abierta'),
-        ('puerta_cerrada', 'Puerta Cerrada'),
-    ]
-
-    # Quién realizó la acción (usuario con rol "Seguridad")
-    usuario_seguridad = models.ForeignKey(
-        Usuario,
+class RegistroAccesoVehicular(models.Model):
+    placa_detectada = models.CharField(max_length=20, help_text="Placa identificada por el sistema OCR.")
+    acceso_exitoso = models.BooleanField(default=False, help_text="Indica si la placa fue reconocida y el acceso fue permitido.")
+    fecha_hora_intento = models.DateTimeField(auto_now_add=True)
+    vehiculo_asociado = models.ForeignKey(
+        'Vehiculo',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        limit_choices_to={'rol__nombre': 'Seguridad'},
-        related_name='reconocimientos_placa'
+        help_text="Vehículo registrado si el acceso fue exitoso. Nulo si no se encontró la placa."
     )
+    observaciones = models.TextField(blank=True, null=True, help_text="Notas adicionales o razones del fallo.")
 
-    # Imagen subida desde la app móvil
-    imagen_placa = models.ImageField(upload_to='reconocimiento_placas/', null=True, blank=True)
-
-    # Resultado del OCR/IA (puede ser vacío si falla)
-    placa_detectada = models.CharField(max_length=20, blank=True, null=True)
-
-    # ¿Coincidió con un vehículo registrado?
-    vehiculo_coincidente = models.ForeignKey(
-        Vehiculo,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='reconocimientos'
-    )
-
-    # Acción tomada en la app (solo lógica, no física)
-    accion_tomada = models.CharField(max_length=20, choices=ACCION_CHOICES, null=True, blank=True)
-
-    # Estado del proceso
-    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='procesando')
-
-    # Fecha y hora del intento
-    fecha_hora = models.DateTimeField(auto_now_add=True)
-
-    # Opcional: guardar la respuesta cruda del servicio de IA (para debugging)
-    respuesta_ia = models.JSONField(null=True, blank=True)
+    class Meta:
+        verbose_name = "Registro de Acceso Vehicular"
+        verbose_name_plural = "Registros de Acceso Vehicular"
+        ordering = ['-fecha_hora_intento']
 
     def __str__(self):
-        return f"Reconocimiento {self.id} - {self.placa_detectada or 'Sin placa'} - {self.accion_tomada or 'N/A'}"
+        estado = "EXITOSO" if self.acceso_exitoso else "FALLIDO"
+        return f"Acceso de {self.placa_detectada} - {estado} el {self.fecha_hora_intento.strftime('%Y-%m-%d %H:%M')}"

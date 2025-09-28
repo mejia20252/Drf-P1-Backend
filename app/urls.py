@@ -5,10 +5,10 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from django.conf.urls import handler404
 from .views import  (RolViewSet, UsuarioViewSet, TelefonoViewSet,
       MyTokenObtainPairView,LogoutView,GroupViewSet,AuthPermissionViewSet,
-         CasaViewSet, ResidenteViewSet,ReconocimientoPlacaViewSet,
+         CasaViewSet, ResidenteViewSet,
     AreaComunViewSet, ReservaViewSet, TareaMantenimientoViewSet,PerfilTrabajadorViewSet, AsignacionTareaViewSet,
     BitacoraViewSet, DetalleBitacoraViewSet, MascotaViewSet, VehiculoViewSet,ComunicadoViewSet,ConceptoPagoViewSet,
-    CuotaViewSet,PagoViewSet,PropiedadViewSet, PropiedadesDelPropietarioView,ContratoArrendamientoViewSet,
+    CuotaViewSet,PagoViewSet,PropiedadViewSet, PropiedadesDelPropietarioView,ContratoArrendamientoViewSet,VerificarPlacaView,
 
 
     DispositivoMovilViewSet, NotificacionPushViewSet, IncidenteSeguridadIAViewSet
@@ -27,7 +27,7 @@ router.register(r'notificaciones', NotificacionPushViewSet, basename='notificaci
 router.register(r'incidentes', IncidenteSeguridadIAViewSet, basename='incidente')
 
 router.register(r'casas', CasaViewSet, basename='casa')
-router.register(r'placas', ReconocimientoPlacaViewSet, basename='placas')
+
 router.register(r'contratos-arrendamiento', ContratoArrendamientoViewSet, basename='contrato-arrendamiento')
 router.register(r'perfiles-trabajador', PerfilTrabajadorViewSet)
 router.register(r'asignaciones-tarea', AsignacionTareaViewSet)
@@ -45,7 +45,7 @@ router.register(r'comunicados', ComunicadoViewSet, basename='comunicado')
 router.register(r'conceptos-pago', ConceptoPagoViewSet, basename='concepto-pago')
 router.register(r'cuotas', CuotaViewSet, basename='cuota')
 router.register(r'pagos', PagoViewSet, basename='pago')
-from .views import stripe_webhook
+from .views import stripe_webhook,create_payment_intent
 urlpatterns = [
     path("", include(router.urls)),
     path('login/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -53,5 +53,8 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='auth_logout'),
     path('mis-propiedades/', PropiedadesDelPropietarioView.as_view(), name='mis_propiedades'),
     path('stripe-webhook/', stripe_webhook, name='stripe_webhook'),
+    path('create-payment-intent/', create_payment_intent, name='create_payment_intent'), # Corrected 
+    path('verificar-placa/', VerificarPlacaView.as_view(), name='verificar_placa'),
+    
 ]
     
