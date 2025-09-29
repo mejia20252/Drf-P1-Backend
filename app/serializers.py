@@ -14,6 +14,8 @@ from .models import (
      TareaMantenimiento, Vehiculo, Comunicado, ConceptoPago,RegistroAccesoVehicular,
     Cuota, Propiedad,Pago
 )
+from .fcm_service import enviar_notificacion_fcm
+
 from django.contrib.auth.models import Group, Permission as AuthPermission
 class RolSerializer(serializers.ModelSerializer):
     class Meta:
@@ -335,12 +337,17 @@ class AreaComunSerializer(serializers.ModelSerializer):
 
         return internal_value
 
+from rest_framework import serializers
+from .models import Reserva, Residente
+
 class ReservaSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = Reserva
         fields = '__all__'
+        
 
-
+    
 
 class TareaMantenimientoSerializer(serializers.ModelSerializer):
     class Meta:
@@ -364,11 +371,134 @@ class VehiculoSerializer(serializers.ModelSerializer):
         return rep
 
 
+
+
 class ComunicadoSerializer(serializers.ModelSerializer):
+    # Campo para controlar si se envía notificación, no es parte del modelo
+    send_notification = serializers.BooleanField(write_only=True, required=False, default=False)
+    # Campo para especificar el grupo de destinatarios (opcional)
+    # Puede ser 'todos', 'propietarios', 'inquilinos', 'administradores', 'trabajadores', 'seguridad' o un ID de usuario
+    target_recipients = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    
+    # Campo de solo lectura para el nombre de la casa de destino (si existe)
+    casa_destino_nombre = serializers.CharField(source='casa_destino.nombre', read_only=True)
+
     class Meta:
         model = Comunicado
-        fields = '__all__'
+        fields = [
+            'id', 'titulo', 'contenido', 'fecha_creacion', 'fecha_publicacion',
+            'estado', 'casa_destino', 'casa_destino_nombre', 'archivo_adjunto', 'fecha_expiracion',
+            'send_notification', 'target_recipients' # Campos adicionales para el envío de notificaciones
+        ]
+        read_only_fields = ['fecha_creacion']
 
+    def create(self, validated_data):
+        send_notification = validated_data.pop('send_notification', False)
+        target_recipients = validated_data.pop('target_recipients', '')
+
+        comunicado = super().create(validated_data) # Primero crea el comunicado
+
+        if send_notification and comunicado.estado == 'publicado':
+            # Solo enviar notificaciones si el comunicado está publicado
+            self._send_comunicado_notifications(comunicado, target_recipients)
+        
+        return comunicado
+
+    def update(self, instance, validated_data):
+        send_notification = validated_data.pop('send_notification', False)
+        target_recipients = validated_data.pop('target_recipients', '')
+
+        # Captura el estado antiguo para comparar
+        old_estado = instance.estado 
+        
+        comunicado = super().update(instance, validated_data) # Luego actualiza el comunicado
+
+        # Solo enviar notificaciones si:
+        # 1. Se solicitó enviar notificación (`send_notification`).
+        # 2. El comunicado está 'publicado' Y O BIEN no estaba publicado antes (es una nueva publicación)
+        #    O BIEN fue una actualización de un comunicado ya publicado y se requirió la notificación.
+        if send_notification and comunicado.estado == 'publicado' and \
+           (old_estado != 'publicado' or (old_estado == 'publicado' and send_notification)): # La última condición 'send_notification' es redundante pero clara.
+            self._send_comunicado_notifications(comunicado, target_recipients)
+
+        return comunicado
+
+    def _send_comunicado_notifications(self, comunicado, target_recipients):
+
+        titulo_notif = f"Nuevo Comunicado: {comunicado.titulo}"
+        cuerpo_notif = comunicado.contenido[:150] + "..." if len(comunicado.contenido) > 150 else comunicado.contenido
+        datos_adicionales = {'comunicado_id': str(comunicado.id), 'action': 'OPEN_COMUNICADO'}
+
+        users_to_notify = []
+
+        if target_recipients == 'todos':
+            users_to_notify = Usuario.objects.filter(is_active=True)
+        elif target_recipients == 'propietarios':
+            rol_propietario = Rol.objects.filter(nombre='Propietario').first()
+            if rol_propietario:
+                users_to_notify = Usuario.objects.filter(rol=rol_propietario, is_active=True)
+        elif target_recipients == 'inquilinos':
+            rol_inquilino = Rol.objects.filter(nombre='Inquilino').first()
+            if rol_inquilino:
+                users_to_notify = Usuario.objects.filter(rol=rol_inquilino, is_active=True)
+        elif target_recipients == 'administradores':
+            rol_admin = Rol.objects.filter(nombre='Administrador').first()
+            if rol_admin:
+                users_to_notify = Usuario.objects.filter(rol=rol_admin, is_active=True)
+        elif target_recipients == 'trabajadores':
+            rol_trabajador = Rol.objects.filter(nombre='Trabajador').first()
+            if rol_trabajador:
+                users_to_notify = Usuario.objects.filter(rol=rol_trabajador, is_active=True)
+        elif target_recipients == 'seguridad': # <--- NUEVA LÓGICA PARA ROL SEGURIDAD
+            rol_seguridad = Rol.objects.filter(nombre='Seguridad').first()
+            if rol_seguridad:
+                users_to_notify = Usuario.objects.filter(rol=rol_seguridad, is_active=True)
+        elif target_recipients.isdigit(): # Es un ID de usuario específico
+            try:
+                user_id = int(target_recipients)
+                user = Usuario.objects.filter(id=user_id, is_active=True).first()
+                if user:
+                    users_to_notify = [user]
+            except ValueError:
+                pass # No es un ID válido, continuar sin agregar.
+        else: # Si no se especificó un target_recipients válido, usar la lógica de `casa_destino`
+            if comunicado.casa_destino:
+                # Notificar a propietarios y residentes de la casa específica
+                propietarios_casa = Usuario.objects.filter(
+                    propiedades__casa=comunicado.casa_destino,
+                    propiedades__activa=True,
+                    is_active=True
+                ).distinct()
+                residentes_casa = Usuario.objects.filter(
+                    residentes__casa=comunicado.casa_destino,
+                    is_active=True
+                ).distinct()
+                # Unir ambos querysets
+                users_to_notify = (propietarios_casa | residentes_casa).distinct()
+            else:
+                # Comunicado general (a todo el condominio)
+                # Notificar a todos los propietarios y residentes en cualquier casa
+                propietarios_condominio = Usuario.objects.filter(
+                    propiedades__isnull=False,
+                    propiedades__activa=True,
+                    is_active=True
+                ).distinct()
+                residentes_condominio = Usuario.objects.filter(
+                    residentes__isnull=False,
+                    is_active=True
+                ).distinct()
+                users_to_notify = (propietarios_condominio | residentes_condominio).distinct()
+        
+        # Enviar la notificación a cada usuario en la lista
+        for user in users_to_notify:
+            enviar_notificacion_fcm(
+                usuario=user,
+                titulo=titulo_notif,
+                cuerpo=cuerpo_notif,
+                tipo='comunicado',
+                datos_adicionales=datos_adicionales
+            )
+        print(f"Notificaciones de comunicado '{comunicado.titulo}' enviadas a {len(users_to_notify)} usuarios.")
 class ConceptoPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConceptoPago

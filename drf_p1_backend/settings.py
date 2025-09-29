@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 #start google
 # --- CREDENTIALS HANDLING FOR GOOGLE CLOUD STORAGE (GCS) ---
+
 _google_credentials_file_path = None
 GS_CREDENTIALS_BASE64 = config('GS_CREDENTIALS_BASE64', default=None)
 
@@ -48,11 +49,12 @@ else:
     print("[INFO] 'GS_CREDENTIALS_BASE64' is not defined. GCS credentials not configured.")
 
 # ---end google ---
+
 #incioconiguracion de crod
 
 _frontend_urls = config('FRONTEND_URLS', default='https://react-p1-frontend.onrender.com')
 CORS_ALLOWED_ORIGINS = [u.strip() for u in _frontend_urls.split(',') if u.strip()]
-
+print(f"CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
 #finde congiguraio de crod
 
 
@@ -205,6 +207,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
+
+#start
 # Configuración de STORAGES para Google Cloud Storage
 
 STORAGES = {

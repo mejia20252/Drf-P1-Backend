@@ -512,60 +512,7 @@ class ComunicadoViewSet(BitacoraLoggerMixin, viewsets.ModelViewSet):
     serializer_class = ComunicadoSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        user = self.request.user
-
-        # Administradores siempre ven todos los comunicados, independientemente del estado.
-        if user.is_authenticated and hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Administrador':
-            return Comunicado.objects.all().order_by('-fecha_publicacion', '-fecha_creacion')
-
-        # Para usuarios no administradores:
-        # 1. Filtramos los comunicados que están 'publicado' y que no han expirado.
-        base_queryset = Comunicado.objects.filter(
-            estado='publicado',
-            fecha_publicacion__isnull=False # Asegura que esté publicado
-        ).filter( # <---  Moved Q objects to a separate .filter() call
-            models.Q(fecha_expiracion__isnull=True) | models.Q(fecha_expiracion__gte=timezone.now())
-        )
-
-        # 2. Comunicados generales (casa_destino es nulo)
-        # Estos deben ser visibles para TODOS los propietarios.
-        # Identificamos si el usuario actual es un 'Propietario'.
-        if user.is_authenticated and hasattr(user, 'rol') and user.rol and user.rol.nombre == 'Propietario':
-            general_comunicados = base_queryset.filter(casa_destino__isnull=True)
-        else:
-            # Otros roles (inquilinos, personal, etc.) no ven comunicados generales
-            # a menos que estén asociados a una casa específica.
-            general_comunicados = Comunicado.objects.none() # Vacío para otros roles
-
-        # 3. Comunicados específicos para las casas del usuario.
-        #    a) Casas donde el usuario es un propietario activo.
-        casas_propietario_ids = Propiedad.objects.filter(
-            propietario=user,
-            activa=True
-        ).values_list('casa__id', flat=True)
-
-        #    b) Casas donde el usuario es un residente.
-        casas_residente_ids = Residente.objects.filter(
-            usuario=user
-        ).values_list('casa__id', flat=True)
-
-        # Combina los IDs de todas las casas relevantes y elimina duplicados
-        todas_las_casas_ids = list(set(list(casas_propietario_ids) + list(casas_residente_ids)))
-
-        # Filtrar comunicados dirigidos a estas casas específicas
-        if todas_las_casas_ids:
-            specific_comunicados = base_queryset.filter(
-                casa_destino__id__in=todas_las_casas_ids
-            )
-        else:
-            specific_comunicados = Comunicado.objects.none()
-
-        # Combina ambos querysets y elimina duplicados
-        # El operador '|' entre querysets realiza un UNION.
-        final_queryset = (general_comunicados | specific_comunicados).distinct()
-
-        return final_queryset.order_by('-fecha_publicacion', '-fecha_creacion')
+    
 
 from .models import ConceptoPago, Cuota, Pago
 from .serializers import ConceptoPagoSerializer, CuotaSerializer, PagoSerializer
@@ -1084,7 +1031,8 @@ class DispositivoMovilViewSet(BitacoraLoggerMixin,viewsets.ModelViewSet):
     queryset = DispositivoMovil.objects.all()
     serializer_class = DispositivoMovilSerializer
     permission_classes = [IsAuthenticated]
-    filterset_fields = ['activo', 'usuario']
+    filter_backends = [DjangoFilterBackend] 
+    filterset_fields = ['activo', 'usuario', 'token_fcm'] # <-- ¡AQUÍ ESTÁ LA CLAVE!
     search_fields = ['modelo_dispositivo', 'sistema_operativo', 'token_fcm']
     ordering_fields = ['fecha_registro', 'ultima_conexion']
 
